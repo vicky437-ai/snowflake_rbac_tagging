@@ -1,0 +1,122 @@
+Hierarchy looks like this:
+
+SYSADMIN
+ └── SNOW_D_ADMIN (owns DB)
+      ├── SNOW_D_READ (account-level role)
+      │    └── SNOW_D_RAW.DB_R (DB role: read-only)
+      ├── SNOW_D_WRITE
+      │    └── SNOW_D_RAW.DB_W
+      └── SNOW_D_DEPLOY
+           └── SNOW_D_RAW.DB_C
+
+
+Account Level
+│
+├── Accountadmin (top)
+│   └── Sysadmin
+│        └── SNOW_D_ADMIN (Delegated Admin)
+│             ├── SNOW_D_DEPLOY
+│             │    └── SNOW_D_RAW.DB_C
+│             ├── SNOW_D_WRITE
+│             │    └── SNOW_D_RAW.DB_W
+│             └── SNOW_D_READ
+│                  └── SNOW_D_RAW.DB_R
+│
+└── Database: SNOW_D_RAW
+     ├── DB Roles: DB_R, DB_W, DB_C
+     └── Ownership: SNOW_D_ADMIN
+
+
+🧩 1. Derive Names Dynamically
+🧩 2. SYSADMIN Creates the Database
+🧩 3. Delegated Admin Creates Database Roles
+Switch to that Admin role:
+Then create database-level roles inside the new DB:
+These are internal roles specific to this DB
+Grant DB roles to higher-level functional roles
+Links database roles → to account-level functional roles
+
+🧩 4. Review What Was Created
+
+
+===
+🧩 Summary hierarchy (simplified)
+
+| Level    | Role          | Purpose                      | Inherits      |
+| -------- | ------------- | ---------------------------- | ------------- |
+| Database | DB_C          | Full create control          | DB_W          |
+| Database | DB_W          | Write (insert/update/delete) | DB_R          |
+| Database | DB_R          | Read-only access             | —             |
+| Schema   | SC_C_<schema> | Create tables/views/etc.     | SC_W_<schema> |
+| Schema   | SC_W_<schema> | Write data                   | SC_R_<schema> |
+| Schema   | SC_R_<schema> | Read-only                    | —             |
+
+
+
+
+USE ROLE ACCOUNTADMIN;
+
+ALTER USER OPENFLOW_USER SET DEFAULT_ROLE = OPENFLOW_ADMIN;
+ALTER USER OPENFLOW_USER SET DEFAULT_SECONDARY_ROLES = ('ALL');
+
+call SYSTEM$BEHAVIOR_CHANGE_BUNDLE_STATUS('2025_06');
+ 
+call SYSTEM$ENABLE_BEHAVIOR_CHANGE_BUNDLE('2025_06');
+ 
+ 
+ 
+ 
+ 
+ Step 1: 
+ 
+ USE ROLE ACCOUNTADMIN;
+
+CREATE ROLE IF NOT EXISTS OPENFLOW_ADMIN;
+
+GRANT CREATE ROLE ON ACCOUNT TO ROLE OPENFLOW_ADMIN;
+
+GRANT CREATE OPENFLOW DATA PLANE INTEGRATION ON ACCOUNT
+   TO ROLE OPENFLOW_ADMIN;
+
+GRANT CREATE OPENFLOW RUNTIME INTEGRATION ON ACCOUNT
+   TO ROLE OPENFLOW_ADMIN;
+   
+ step 2: 
+ 
+ USE ROLE ACCOUNTADMIN;
+GRANT ROLE OPENFLOW_ADMIN TO USER <OPENFLOW_USER>;
+ALTER USER <OPENFLOW_USER> SET DEFAULT_ROLE = OPENFLOW_ADMIN;
+ALTER USER <OPENFLOW_USER> SET DEFAULT_SECONDARY_ROLES = ('ALL');
+
+
+Step 3:
+
+USE ROLE ACCOUNTADMIN;
+
+CREATE DATABASE IF NOT EXISTS OPENFLOW;
+USE OPENFLOW;
+CREATE SCHEMA IF NOT EXISTS OPENFLOW;
+USE SCHEMA OPENFLOW;
+CREATE IMAGE REPOSITORY IF NOT EXISTS OPENFLOW;
+
+GRANT USAGE ON DATABASE OPENFLOW TO ROLE PUBLIC;
+GRANT USAGE ON SCHEMA OPENFLOW TO ROLE PUBLIC;
+GRANT READ ON IMAGE REPOSITORY OPENFLOW.OPENFLOW.OPENFLOW TO ROLE PUBLIC;
+
+
+Step 4:
+
+call SYSTEM$BEHAVIOR_CHANGE_BUNDLE_STATUS('2025_06');
+call SYSTEM$ENABLE_BEHAVIOR_CHANGE_BUNDLE('2025_06');
+
+
+USE ROLE ACCOUNTADMIN;
+ALTER USER <OPENFLOW_USER> SET DEFAULT_SECONDARY_ROLES = ('ALL');
+
+GRANT ROLE OPENFLOW_ADMIN TO USER <OPENFLOW_USER>;
+
+CREATE IMAGE REPOSITORY IF NOT EXISTS OPENFLOW;
+GRANT USAGE ON DATABASE OPENFLOW TO ROLE PUBLIC;
+GRANT USAGE ON SCHEMA OPENFLOW TO ROLE PUBLIC;
+GRANT READ ON IMAGE REPOSITORY OPENFLOW.OPENFLOW.OPENFLOW TO ROLE PUBLIC;
+
