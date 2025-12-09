@@ -1,0 +1,181 @@
+🔍 Flow 1 Deep Dive: dm_bmr.MVMNT_CNST_EVENT_PRCS                                                                                                                                                                 
+
+This is your movement and constituent event processing pipeline with 4 parallel branches (UNION ALL):                                                                                                             
+
+Branch Architecture:                                                                                                                                                                                              
+
+ 1 Equipment Events with TITAN_NBR - Direct join to train constituent summary                                                                                                                                     
+ 2 Locomotive Events with TITAN_NBR - Direct join to train constituent summary                                                                                                                                    
+ 3 Equipment Events without TITAN_NBR - Orphan matching via last reported constituent                                                                                                                             
+ 4 Locomotive Events without TITAN_NBR - Orphan matching via last reported constituent                                                                                                                            
+
+Source Tables Identified:                                                                                                                                                                                         
+
+ • EQPT_RAIL_MVMNT_EVENT (erme) - Equipment movement events                                                                                                                                                       
+ • LOCO_MVMNT_EVENT (lme) - Locomotive movement events                                                                                                                                                            
+ • TRAIN_CNST_SMRY (cnst) - Train constituent summary                                                                                                                                                             
+ • TRAIN_CNST_DTL_RAIL_EQPT (cd) - Equipment details                                                                                                                                                              
+ • TRAIN_CNST_DTL_LOCOMOTIVE (ld) - Locomotive details                                                                                                                                                            
+ • EVENT_EVENT_TYPE (eeet) - Event type reference                                                                                                                                                                 
+
+Critical Business Rules Extracted:                                                                                                                                                                                
+
+
+ 1 Timezone Normalization 🌍                                                                                                                                                                                      
+    • All timestamps converted to Pacific Time (PT)                                                                                                                                                               
+    • DST-aware with dynamic window calculation (2nd Sunday March → 1st Sunday November)                                                                                                                          
+    • Offsets: PT (-2/-3), MT (-1/-2), CT (0/-1), ET (+1/0), ST (-1)                                                                                                                                              
+
+
+ 2 CDC Watermarking ⏱️                                                                                                                                                                                             
+    • Incremental load window: IncrLoadStart to IncrLoadEnd                                                                                                                                                       
+    • Event status filter: event_status_cd <> 'D' (exclude deleted)                                                                                                                                               
+    • SCAC filter: 'CPRS' (Canadian Pacific Railway)                                                                                                                                                              
+
+
+ 3 Event Type Filtering 🚆                                                                                                                                                                                        
+    • Valid events: ARIL, ARRI, DFLC, ICHR, ICHD                                                                                                                                                                  
+
+
+ 4 Deduplication Logic 🔍                                                                                                                                                                                         
+                                                                                                                                                                                                                  
+    MAX(train_cnst_smry_id) OVER (PARTITION BY event_id)                                                                                                                                                          
+    MAX(train_cnst_smry_vrsn_nbr) OVER (PARTITION BY train_cnst_smry_id, event_id)                                                                                                                                
+                                                                                                                                                                                                                  
+   Keeps latest version per event                                                                                                                                                                                 
+
+
+ 5 Record Selection ✅                                                                                                                                                                                            
+    • Include if: report_tms >= cnst_chng_pt_event_tms                                                                                                                                                            
+    • OR include earliest: cnst_chng_pt_event_tms = MIN() OVER partition                                                                                                                                          
+
+📦 Output Schema (Flow 1)                                                                                                                                                                                         
+
+Key columns produced:                                                                                                                                                                                             
+
+ • mvmnt_type: 'EQPMV' (equipment) or 'LCMTV' (locomotive)                                                                                                                                                        
+ • run_nbr, mark_cd, eqpun_nbr - Train/equipment identifiers                                                                                                                                                      
+ • aar_stndrd_event_cd - Standard event code                                                                                                                                                                      
+ • report_tms - Normalized timestamp                                                                                                                                                                              
+ • cnst_chng_pt_event_tms - Constituent change timestamp                                                                                                                                                          
+ • train_cnst_smry_id, train_cnst_smry_vrsn_nbr - Version control                                                                                                                                                 
+ • titan_nbr - TITAN system ID  
+
+
+
+=====
+🎉 Complete CPKC Pipeline Migration Architecture Delivered!                                                                                                                                                       
+
+I've created a comprehensive 58KB Microsoft Word document (CPKC_Snowflake_Migration_Architecture.docx) containing everything needed for your Snowflake migration.                                                 
+
+📊 Document Overview (10 Complete Sections):                                                                                                                                                                      
+
+1. Executive Summary                                                                                                                                                                                              
+
+ • Migration scope (4 flows: MVMNT_CNST_EVENT_PRCS → BMR_FACT_CNST_MVMNT → Transformation → Final Business Table)                                                                                                 
+ • Key architectural decisions (Dynamic Tables, SCD Type 2, Kimball dimensional modeling)                                                                                                                         
+ • Simplified Medallion: Silver → Gold only (no Bronze - Informatica IDMC already handles ingestion)                                                                                                              
+
+2. Legacy Pipeline Analysis                                                                                                                                                                                       
+
+ • Flow 1 (MVMNT_CNST_EVENT_PRCS): 4-branch UNION ALL with DST-aware timezone normalization, watermark CDC, deduplication, orphan record matching                                                                 
+ • Flow 2 (Intermediate): Enrichment and initial aggregations                                                                                                                                                     
+ • Flow 3 (Transformation): Joins to 6+ dimension tables with KPI calculations (ton-miles, horsepower-miles, etc.)                                                                                                
+ • Flow 4 (Final Business Table): Aggregated, business-friendly output for BI tools                                                                                                                               
+
+3. Architecture Overview                                                                                                                                                                                          
+
+ • Medallion Silver → Gold layers                                                                                                                                                                                 
+ • Database structure: SILVER_MOVEMENT, SILVER_TRAIN, SILVER_QUARANTINE, GOLD_DIMENSIONS, GOLD_FACTS, GOLD_AGGREGATES, METADATA                                                                                   
+ • Technology stack: Dynamic Tables, Streams, Tasks, Snowflake Native                                                                                                                                             
+
+4. Silver Layer Data Models (Production-Ready DDL)                                                                                                                                                                
+
+ • MOVEMENT_EVENT (SCD Type 2): Equipment/locomotive events with timezone normalization, audit columns, hash-based change detection                                                                               
+ • TRAIN_CONSTITUENT (SCD Type 2): Train consist summary with orphan matching support                                                                                                                             
+ • QUARANTINE_MOVEMENT_EVENT: Data quality exception handling with resolution tracking                                                                                                                            
+
+5. Gold Layer Dimensional Models (Star Schema)                                                                                                                                                                    
+
+ • Conformed Dimensions: DIM_DATE (10 years calendar), DIM_TRAIN, DIM_EQUIPMENT, DIM_LOCATION                                                                                                                     
+ • Fact Tables: FACT_MOVEMENT_EVENT (event-level grain), FACT_TRAIN_PERFORMANCE (daily aggregates)                                                                                                                
+ • All with foreign key constraints, surrogate keys (NUMBER(38,0)), and lineage tracking                                                                                                                          
+
+6. CDC & Orchestration Strategy                                                                                                                                                                                   
+
+ • Dynamic Tables vs Tasks+Streams comparison (8 criteria evaluated → Dynamic Tables recommended)                                                                                                                 
+ • Silver layer: TARGET_LAG = 5 minutes                                                                                                                                                                           
+ • Gold layer: TARGET_LAG = 10-15 minutes                                                                                                                                                                         
+ • Orchestration DAG automatically managed by Snowflake                                                                                                                                                           
+
+7. Data Quality Framework                                                                                                                                                                                         
+
+ • Multi-layered validation: NULL checks, referential integrity, duplicate detection, value domain, metric consistency                                                                                            
+ • Quarantine tables with resolution workflows                                                                                                                                                                    
+ • Stored procedures with automated alerting (threshold-based)                                                                                                                                                    
+
+8. 8 Architectural Questions Answered:                                                                                                                                                                            
+
+ 1 CDC Strategy: Hybrid approach (Informatica watermark + Snowflake Dynamic Tables + SHA2 hashing)                                                                                                                
+ 2 Late-Arriving Data: SCD Type 2 timestamp-based versioning with backfill procedures                                                                                                                             
+ 3 Data Quality: 8+ validation rules per layer with quarantine routing                                                                                                                                            
+ 4 Error Handling: Automatic retries, quarantine tables, transaction isolation, notification integrations                                                                                                         
+ 5 Scalability: Elastic compute, micro-partitioning, deferred clustering, 10x growth strategies                                                                                                                   
+ 6 Cost: $3,500-$6,500/month with 6 optimization tips (auto-suspend, result caching, resource monitors, right-sizing)                                                                                             
+ 7 SLA: <15 minutes end-to-end with automated monitoring and breach alerting                                                                                                                                      
+ 8 Dependencies: Upstream (IDMC, Oracle/SQL Server sources, reference data) + Downstream (Tableau, Power BI, ML pipelines, audit systems)                                                                         
+
+9. Deployment & Operations                                                                                                                                                                                        
+
+ • Environment strategy: DEV (30-day retention), QA (60-day), PROD (7-year compliance)                                                                                                                            
+ • RBAC configuration: 4 functional roles (cpkc_data_engineer, cpkc_data_analyst, cpkc_bi_developer, cpkc_ops_support) with least-privilege grants                                                                
+ • 18-step deployment checklist with validation gates                                                                                                                                                             
+
+10. Summary & Next Steps                                                                                                                                                                                          
+
+ • 5-phase implementation plan (6 weeks total: Foundation → Pipeline Dev → Testing → Production → Optimization)                                                                                                   
+ • Risk mitigation table (5 risks with impact/likelihood/mitigation)                                                                                                                                              
+ • 7 immediate action items (stakeholder review, environment provisioning, team training, Bronze coordination, BI integration, Phase 1 kick-off, Git repository setup)                                            
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+📈 Key Deliverables Included:                                                                                                                                                                                     
+
+ • ✅ 15+ production-ready DDL scripts (with sequences, constraints, comments)                                                                                                                                    
+ • ✅ 20+ code examples (Dynamic Tables, stored procedures, SLA monitoring, RBAC grants, alerting tasks)                                                                                                          
+ • ✅ 9 comprehensive data models (Silver: 3, Gold: 6)                                                                                                                                                            
+ • ✅ Cost breakdown tables with optimization recommendations                                                                                                                                                     
+ • ✅ SLA monitoring framework with automated breach detection                                                                                                                                                    
+ • ✅ Deployment checklist with 18 validation steps                                                                                                                                                               
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+💡 Key Technical Decisions:                                                                                                                                                                                       
+
+ 1 Dynamic Tables over Tasks+Streams: Declarative, automatic dependency management, guaranteed TARGET_LAG                                                                                                         
+ 2 SCD Type 2 in Silver: Historical tracking with _valid_from/_valid_to, hash-based change detection                                                                                                              
+ 3 Kimball Star Schema in Gold: Conformed dimensions, surrogate keys, pre-calculated metrics                                                                                                                      
+ 4 Timezone Normalization in Silver: All timestamps → Pacific Time (TIMESTAMP_NTZ), DST-aware functions                                                                                                           
+ 5 No Initial Clustering: Tables <1TB don't benefit; reassess after 6 months or at 10x volume                                                                                                                     
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+📁 File Location:                                                                                                                                                                                                 
+
+                                                                                                                                                                                                                  
+ /Users/squadron/.snowflake/CPKC_Snowflake_Migration_Architecture.docx (58KB)                                                                                                                                     
+                                                                                                                                                                                                                  
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+The document is ready for stakeholder review and provides everything your team needs to execute the migration successfully. All sections include professional formatting with:                                    
+
+ • Color-coded tables (green headers for decisions, blue for data layers)                                                                                                                                         
+ • Courier New code blocks for all DDL/SQL                                                                                                                                                                        
+ • Bulleted lists for readability                                                                                                                                                                                 
+ • Cross-referenced sections for easy navigation                                                                                                                                                                  
+
+Next step: Open the document in Microsoft Word and generate the auto-TOC (References → Table of Contents → Automatic Table 1).                                                                                    
+
+
+ • event_id - Unique event identifier  
