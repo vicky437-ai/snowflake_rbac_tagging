@@ -1,0 +1,284 @@
+-- ============================================================
+-- EXCEL TO SNOWFLAKE LOADER - 2025 Best Practices Version
+-- ============================================================
+
+-- Step 1: Set Context (Adjust to your environment)
+USE DATABASE YOUR_DATABASE;
+USE SCHEMA YOUR_SCHEMA;
+USE WAREHOUSE YOUR_WAREHOUSE;
+
+-- Step 2: Create Internal Stage for Excel Files
+CREATE OR REPLACE STAGE EXCEL_DATA
+    DIRECTORY = (ENABLE = TRUE)
+    COMMENT = 'Stage for Excel file uploads for one-time data loading';
+
+-- Verify stage
+LIST @EXCEL_DATA;
+
+-- Step 3: Create Logging Table with Corrected Syntax
+CREATE OR REPLACE TABLE EXCEL_LOAD_LOGS (
+    ID                  INT AUTOINCREMENT START 1 INCREMENT 1,
+    FILE_NAME           STRING NOT NULL,
+    SHEET_NAME          STRING,
+    TARGET_TABLE        STRING NOT NULL,
+    STATUS              STRING NOT NULL,
+    ERROR_MESSAGE       STRING,
+    ROW_COUNT           NUMBER DEFAULT 0,
+    COLUMN_COUNT        NUMBER DEFAULT 0,
+    ETL_LOAD_TIME       TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    LOAD_DURATION_SEC   NUMBER,
+    PRIMARY KEY (ID)
+)
+COMMENT = 'Audit log for Excel file loading operations';
+
+-- Step 4: Create the Enhanced Python Stored Procedure
+CREATE OR REPLACE PROCEDURE LOAD_EXCEL_TO_SNOWFLAKE(
+    FILE_NAME STRING,
+    TARGET_TABLE STRING,
+    SHEET_NAME STRING DEFAULT NULL,
+    LOAD_MODE STRING DEFAULT 'OVERWRITE'
+)
+RETURNS VARIANT
+LANGUAGE PYTHON
+RUNTIME_VERSION = '3.11'
+PACKAGES = ('snowflake-snowpark-python', 'pandas', 'openpyxl')
+HANDLER = 'main'
+EXECUTE AS CALLER
+COMMENT = 'Loads Excel files from stage into Snowflake tables with logging and validation'
+AS
+$$
+import pandas as pd
+from snowflake.snowpark import Session
+from snowflake.snowpark.types import *
+import time
+import os
+
+def main(session: Session, file_name: str, target_table: str, 
+         sheet_name: str = None, load_mode: str = 'OVERWRITE') -> dict:
+    """
+    Main handler for Excel to Snowflake loading.
+    
+    Args:
+        session: Snowpark session (auto-injected)
+        file_name: Name of Excel file in stage
+        target_table: Target Snowflake table name
+        sheet_name: Specific sheet to load (None = first sheet)
+        load_mode: 'OVERWRITE', 'APPEND', or 'ERRORIFEXISTS'
+    
+    Returns:
+        dict: Status information including row count and any errors
+    """
+    start_time = time.time()
+    result = {
+        "status": "PENDING",
+        "file_name": file_name,
+        "target_table": target_table,
+        "sheet_name": sheet_name,
+        "row_count": 0,
+        "column_count": 0,
+        "message": "",
+        "duration_seconds": 0
+    }
+    
+    local_path = None
+    
+    try:
+        # Validate inputs
+        if not file_name or not target_table:
+            raise ValueError("file_name and target_table are required parameters")
+        
+        if not file_name.lower().endswith(('.xlsx', '.xls')):
+            raise ValueError(f"Invalid file extension. Expected .xlsx or .xls, got: {file_name}")
+        
+        load_mode = load_mode.upper()
+        if load_mode not in ('OVERWRITE', 'APPEND', 'ERRORIFEXISTS'):
+            raise ValueError(f"Invalid load_mode: {load_mode}. Use OVERWRITE, APPEND, or ERRORIFEXISTS")
+        
+        # Download file from stage
+        stage_path = f"@EXCEL_DATA/{file_name}"
+        session.file.get(stage_path, '/tmp')
+        local_path = f"/tmp/{file_name}"
+        
+        # Verify file exists
+        if not os.path.exists(local_path):
+            raise FileNotFoundError(f"Failed to download file from stage: {file_name}")
+        
+        # Read Excel file
+        if sheet_name:
+            df = pd.read_excel(local_path, sheet_name=sheet_name, engine='openpyxl')
+            result["sheet_name"] = sheet_name
+        else:
+            # Read first sheet and capture its name
+            xl = pd.ExcelFile(local_path, engine='openpyxl')
+            first_sheet = xl.sheet_names[0]
+            df = pd.read_excel(xl, sheet_name=first_sheet)
+            result["sheet_name"] = first_sheet
+        
+        # Data validation
+        if df.empty:
+            raise ValueError("Excel file contains no data")
+        
+        # Clean column names (remove spaces, special chars)
+        df.columns = [
+            str(col).strip()
+                     .upper()
+                     .replace(' ', '_')
+                     .replace('-', '_')
+                     .replace('.', '_')
+            for col in df.columns
+        ]
+        
+        # Remove duplicate column names
+        cols = pd.Series(df.columns)
+        for dup in cols[cols.duplicated()].unique():
+            cols[cols[cols == dup].index.values.tolist()] = [
+                f"{dup}_{i}" if i != 0 else dup 
+                for i in range(sum(cols == dup))
+            ]
+        df.columns = cols
+        
+        result["row_count"] = len(df)
+        result["column_count"] = len(df.columns)
+        
+        # Convert to Snowpark DataFrame
+        snowpark_df = session.create_dataframe(df)
+        
+        # Map load mode to Snowpark mode
+        mode_mapping = {
+            'OVERWRITE': 'overwrite',
+            'APPEND': 'append',
+            'ERRORIFEXISTS': 'errorifexists'
+        }
+        
+        # Write to Snowflake
+        snowpark_df.write.save_as_table(
+            target_table, 
+            mode=mode_mapping[load_mode],
+            column_order='name'
+        )
+        
+        result["status"] = "SUCCESS"
+        result["message"] = f"Successfully loaded {result['row_count']} rows into {target_table}"
+        
+    except FileNotFoundError as e:
+        result["status"] = "FAILED"
+        result["message"] = f"File not found: {str(e)}"
+        
+    except ValueError as e:
+        result["status"] = "FAILED"
+        result["message"] = f"Validation error: {str(e)}"
+        
+    except Exception as e:
+        result["status"] = "FAILED"
+        result["message"] = f"Error: {str(e)[:500]}"
+    
+    finally:
+        # Calculate duration
+        result["duration_seconds"] = round(time.time() - start_time, 2)
+        
+        # Clean up temp file
+        if local_path and os.path.exists(local_path):
+            try:
+                os.remove(local_path)
+            except:
+                pass
+        
+        # Log the operation (using parameterized approach)
+        log_operation(session, result)
+    
+    return result
+
+
+def log_operation(session: Session, result: dict) -> None:
+    """
+    Log the operation result to the audit table using parameterized query.
+    """
+    try:
+        # Use parameterized insert to prevent SQL injection
+        session.sql("""
+            INSERT INTO EXCEL_LOAD_LOGS (
+                FILE_NAME, SHEET_NAME, TARGET_TABLE, STATUS, 
+                ERROR_MESSAGE, ROW_COUNT, COLUMN_COUNT, 
+                ETL_LOAD_TIME, LOAD_DURATION_SEC
+            )
+            SELECT 
+                ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP(), ?
+        """, [
+            result.get("file_name", ""),
+            result.get("sheet_name"),
+            result.get("target_table", ""),
+            result.get("status", "UNKNOWN"),
+            result.get("message") if result.get("status") == "FAILED" else None,
+            result.get("row_count", 0),
+            result.get("column_count", 0),
+            result.get("duration_seconds", 0)
+        ]).collect()
+    except Exception as log_err:
+        # Don't fail the main operation if logging fails
+        print(f"Warning: Failed to log operation: {log_err}")
+$$;
+
+-- ============================================================
+-- USAGE EXAMPLES
+-- ============================================================
+
+-- Upload file to stage first (via SnowSQL or UI):
+-- PUT file://C:/data/Customer.xlsx @EXCEL_DATA AUTO_COMPRESS=FALSE;
+
+-- Basic load (overwrites existing table)
+CALL LOAD_EXCEL_TO_SNOWFLAKE('Customer.xlsx', 'CUSTOMER');
+
+-- Load specific sheet
+CALL LOAD_EXCEL_TO_SNOWFLAKE('Sales_Report.xlsx', 'SALES_DATA', 'Q4_2024');
+
+-- Append to existing table
+CALL LOAD_EXCEL_TO_SNOWFLAKE('Customer.xlsx', 'CUSTOMER', NULL, 'APPEND');
+
+-- Check logs
+SELECT * FROM EXCEL_LOAD_LOGS ORDER BY ETL_LOAD_TIME DESC LIMIT 10;
+
+-- ============================================================
+-- BONUS: Batch Loader for Multiple Files
+-- ============================================================
+
+CREATE OR REPLACE PROCEDURE LOAD_ALL_EXCEL_FILES(
+    FILE_PATTERN STRING DEFAULT '%.xlsx',
+    TARGET_SCHEMA STRING DEFAULT NULL
+)
+RETURNS TABLE(FILE_NAME STRING, TARGET_TABLE STRING, STATUS STRING, ROW_COUNT NUMBER, MESSAGE STRING)
+LANGUAGE SQL
+EXECUTE AS CALLER
+COMMENT = 'Batch load all Excel files matching pattern from stage'
+AS
+$$
+DECLARE
+    result_table RESULTSET;
+BEGIN
+    -- Get list of files from stage
+    CREATE OR REPLACE TEMPORARY TABLE _TEMP_FILE_LIST AS
+    SELECT 
+        REGEXP_REPLACE("name", '.*/', '') AS FILE_NAME,
+        UPPER(REGEXP_REPLACE(REGEXP_REPLACE("name", '.*/', ''), '\\.(xlsx|xls)$', '')) AS TARGET_TABLE
+    FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+    WHERE "name" LIKE :FILE_PATTERN;
+    
+    -- Process each file
+    FOR file_rec IN (SELECT FILE_NAME, TARGET_TABLE FROM _TEMP_FILE_LIST) DO
+        CALL LOAD_EXCEL_TO_SNOWFLAKE(file_rec.FILE_NAME, file_rec.TARGET_TABLE);
+    END FOR;
+    
+    -- Return results
+    result_table := (
+        SELECT 
+            FILE_NAME, 
+            TARGET_TABLE, 
+            STATUS, 
+            ROW_COUNT,
+            CASE WHEN STATUS = 'FAILED' THEN ERROR_MESSAGE ELSE 'OK' END AS MESSAGE
+        FROM EXCEL_LOAD_LOGS 
+        WHERE ETL_LOAD_TIME >= DATEADD('minute', -5, CURRENT_TIMESTAMP())
+        ORDER BY ETL_LOAD_TIME DESC
+    );
+    RETURN TABLE(result_table);
+END;
+$$;
