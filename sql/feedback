@@ -1,0 +1,37 @@
+
+
+Recommended Options for the CPKC Rail360 Projects:
+Please provide the recommended transformation and orchestration options for the CPKC project. Also confirm whether any proof-of-concept (PoC) has already been completed.
+ 
+Visual ETL Options:
+Native Snowflake options (Streams, Dynamic Tables, Snowpark) primarily support a fully coded approach.
+Please include additional recommendations that provide Visual ETL /Drag drop capabilities.
+ 
+Unit Testing Support:
+Please include a comparison of how each option supports automated module/unit testing.
+Also clarify whether unit testing should be performed using native Snowflake capabilities or if we could use dbt for testing.
+ 
+Cost :
+Please include a cost comparison for each option, especially for near real-time pipelines. Please include approximate cost numbers .
+ 
+Data Quality Framework Options:
+how  DMF feature will support data quality.
+ 
+Retry & Recovery Mechanisms:
+For Dynamic Tables/streams+tasks, please include the retry and recovery options available when a pipeline fails.
+ 
+Monitoring & Notification Support:
+Include details on monitoring, alerting, and notification capabilities.
+ 
+Documentation Support:
+Include the documentation Support availability.
+ 
+Data Lineage :
+Include a comparison of data lineage capabilities.
+ 
+CI/CD Support:
+Please include the CI/CD capabilities for each option, covering integration with Git, automated testing, code review workflows, and deployment automation.
+ 
+Deployment Artifacts:
+Please include details on the deployment artifacts required for each approach—for example,
+ SQL scripts, Python packages, dbt models, or configuration files—and how these artifacts are managed and deployed through the CI/CD pipeline.
