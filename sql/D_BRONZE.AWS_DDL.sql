@@ -1,0 +1,58 @@
+EVENTS_TRAIN_MVMNT_EVENT
+
+create or replace TABLE D_BRONZE.AWS.EVENTS_TRAIN_MVMNT_EVENT (
+	"event_id" NUMBER(38,0) NOT NULL,
+	"event" VARCHAR(80),
+	"event_timestamp_utc" TIMESTAMP_NTZ(6) NOT NULL,
+	"train_plan_leg_id" NUMBER(18,0),
+	"source_system" VARCHAR(80),
+	"direction" VARCHAR(8),
+	"train_name" VARCHAR(60),
+	"fsac" VARCHAR(20),
+	"latitude" NUMBER(11,8),
+	"longitude" NUMBER(11,8),
+	"mile_km_number" NUMBER(10,2),
+	"subdivision_name" VARCHAR(200),
+	"station_name" VARCHAR(200),
+	"scac" VARCHAR(16),
+	"division" VARCHAR(200),
+	"region" VARCHAR(200),
+	"district" VARCHAR(200),
+	"state_province" VARCHAR(12),
+	"country" VARCHAR(8),
+	"subdivision_id" NUMBER(18,0),
+	"record_update_timestamp_utc" TIMESTAMP_NTZ(6),
+	"updated_from_loco_id" VARCHAR(56),
+	"lead_locomotive" VARCHAR(56),
+	INFA_LAST_REPLICATED TIMESTAMP_NTZ(9),
+	constraint "PK_EVENTS_TRAIN_MVMNT_EVENT_BASE_train_mvmnt_event_pkey" primary key ("event_id", "event_timestamp_utc")
+);
+
+EVENTS_LOCOMOTIVE_MVMNT_EVENT:
+create or replace TABLE D_BRONZE.AWS.EVENTS_LOCOMOTIVE_MVMNT_EVENT (
+	"event_id" NUMBER(38,0) NOT NULL,
+	"event" VARCHAR(80),
+	"event_timestamp_utc" TIMESTAMP_NTZ(6) NOT NULL,
+	"source_system" VARCHAR(80),
+	"direction" VARCHAR(8),
+	"mark_cd" VARCHAR(16),
+	"eqpun_nbr" VARCHAR(40),
+	"fsac" VARCHAR(20),
+	"latitude" NUMBER(11,8),
+	"longitude" NUMBER(11,8),
+	"mile_km_number" NUMBER(10,2),
+	"subdivision_name" VARCHAR(200),
+	"station_name" VARCHAR(200),
+	"train_plan_leg_id" NUMBER(18,0),
+	"train_name" VARCHAR(60),
+	"scac" VARCHAR(16),
+	"division" VARCHAR(200),
+	"region" VARCHAR(200),
+	"district" VARCHAR(200),
+	"state_province" VARCHAR(12),
+	"country" VARCHAR(8),
+	"subdivision_id" NUMBER(18,0),
+	"record_update_timestamp_utc" TIMESTAMP_NTZ(6),
+	INFA_LAST_REPLICATED TIMESTAMP_NTZ(9),
+	constraint "PK_EVENTS_LOCOMOTIVE_MVMNT_EVENT_BASE_locomotive_mvmnt_event_pkey" primary key ("event_id", "event_timestamp_utc")
+);
