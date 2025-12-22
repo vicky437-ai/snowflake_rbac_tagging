@@ -1,0 +1,176 @@
+You are a Senior Snowflake Solutions Architect with deep expertise in enterprise data platform design, CDC patterns, Dynamic Tables, and Snowflake 2025 best practices. You have reviewed and approved architecture documents for Fortune 500 customers and have experience presenting technical designs to architecture review boards.
+
+I am sharing a design specification document titled "Bronze to Silver Curated Data Layer Design Specification" for your technical review. This document will be presented to our customer's architecture team and must meet production-ready standards.
+
+---
+
+DOCUMENT CONTEXT
+
+This document defines the Bronze to Silver curated layer transformation architecture. The scope is intentionally focused:
+
+- Source: Raw data in Bronze layer ingested via Informatica IDMC
+- Target: Curated Silver layer datasets ready for downstream pipeline consumption
+- Patterns Covered: CDC (Change Data Capture) and Full Load (reference/master data)
+- Implementation: Dynamic Tables with INCREMENTAL and FULL refresh modes
+- Sample CDC Table: D_BRONZE.SADB.TRAIN_PLAN_LEG
+- Sample Full Load Table: D_BRONZE.AZURE.TRAIN_PRODUCTIVITY_CPKC_GTM_TRN_FACT
+
+The Bronze layer contains IDMC-created objects:
+- _BASE tables (one-time historical snapshots)
+- _LOG tables (append-only CDC journals with _OLD/_NEW column pairs)
+- CDC views (query-time current state calculation)
+- Streams (change tracking on _LOG - not used due to Snowflake limitations)
+
+The Silver curated layer provides:
+- Deduplicated, business-ready datasets
+- Soft delete handling with IS_DELETED flag
+- Single source of truth for downstream Fact and Dimension builds
+- SLA-enforced data freshness via TARGET_LAG
+
+---
+
+CURRENT DOCUMENT STRUCTURE
+
+Review whether this ordering is appropriate for a customer architecture presentation:
+
+1. Executive Summary (Purpose, Scope, Target Outcomes, Enterprise Readiness)
+2. Informatica IDMC – CDC Architecture Overview
+3. Problem Statement – Why Silver Should Not Consume Directly
+4. Why the Silver Curated Layer Is Required
+5. Why Dynamic Tables Are the Best Choice (2025)
+6. CDC Handling with _LOG Tables + Dynamic Tables
+7. Complete Implementation (Architecture Diagram)
+8. Implementation Scripts for Sample Table
+9. Full Load Tables Strategy
+10. Error Handling & Alerting Strategy
+11. Data Quality Validation Strategy (marked TBD)
+12. Monitoring & SLA Management (marked TBD)
+13. Disaster Recovery & Reprocessing (marked TBD)
+14. Functional Capabilities in Silver Curated Layer
+15. Downstream Consumption Benefits
+16. Data Loss Scenarios & Recovery
+17. Enterprise Customer Q&A
+
+---
+
+REVIEW OBJECTIVES
+
+Provide feedback on the following areas:
+
+1. DOCUMENT STRUCTURE AND ORDERING
+   - Is the current section ordering logical for a customer architecture presentation?
+   - Should any sections be reordered for better flow and comprehension?
+   - Are there sections that should be combined or split?
+   - Is the progression from "why" to "how" to "what if" clear?
+   - Where should the TBD sections (Data Quality, Monitoring, DR) be placed once completed?
+   - Does the document tell a coherent story from problem to solution to implementation?
+
+2. ARCHITECTURAL ALIGNMENT WITH SNOWFLAKE 2025 BEST PRACTICES
+   - Is the decision to use Dynamic Tables on _LOG tables (instead of Streams) correctly justified?
+   - Is the IMMUTABLE WHERE optimization applied appropriately?
+   - Are the REFRESH_MODE settings (INCREMENTAL for CDC, FULL for Full Load) correct?
+   - Is the TARGET_LAG configuration appropriate for each pattern?
+   - Are there any architectural anti-patterns or risks?
+
+3. CDC PATTERN TECHNICAL REVIEW
+   - Is the IDMC _BASE and _LOG consumption pattern technically sound?
+   - Is the soft delete implementation (IS_DELETED flag with OP_CODE='D') correct?
+   - Is the ROW_NUMBER() deduplication logic partitioned by primary key appropriate?
+   - Is the UNION ALL approach for combining BASE + CDC_DT in CURR_DT optimal?
+   - Are late-arriving data and out-of-order events handled correctly?
+
+4. FULL LOAD PATTERN TECHNICAL REVIEW
+   - Is REFRESH_MODE = FULL appropriate for reference tables?
+   - Is the use of CURRENT_TIMESTAMP() in FULL refresh mode correctly documented?
+   - Is TARGET_LAG = '1 hour' reasonable, or should DOWNSTREAM be recommended?
+
+5. IMPLEMENTATION SCRIPTS REVIEW
+   - Are the sample SQL scripts production-ready?
+   - Is the one-time BASE load script correctly structured?
+   - Is the CDC Dynamic Table definition complete and accurate?
+   - Is the CURR_DT deduplication logic correct?
+   - Are there any missing configurations or settings?
+
+6. ERROR HANDLING AND ALERTING
+   - Is the alerting strategy using INFORMATION_SCHEMA metadata appropriate?
+   - Are the alert thresholds (10-minute SLA breach) reasonable?
+   - Is the email notification integration correctly configured?
+
+7. GAPS AND INCOMPLETE SECTIONS
+   - For sections marked TBD (Data Quality, Monitoring, DR), what specific content should be added?
+   - Are there critical elements missing that would concern an architecture review board?
+   - What questions might the customer ask that are not addressed?
+
+8. CUSTOMER PRESENTATION READINESS
+   - Is the language appropriate for an architecture review board audience?
+   - Are technical decisions clearly justified with business rationale?
+   - Is the Q&A section comprehensive enough?
+   - Are there any statements that could raise concerns or require clarification?
+
+---
+
+OUTPUT FORMAT
+
+Provide your review in the following structure:
+
+SECTION 1: DOCUMENT STRUCTURE ASSESSMENT
+- Current ordering evaluation
+- Recommended section reordering (if any)
+- Sections to combine or split
+- Flow and narrative assessment
+
+SECTION 2: TECHNICAL ACCURACY REVIEW
+- CDC pattern correctness
+- Full Load pattern correctness
+- Dynamic Table configuration validation
+- Script accuracy assessment
+
+SECTION 3: SNOWFLAKE 2025 ALIGNMENT
+- Best practices alignment score (1-10)
+- Features correctly applied
+- Missing or incorrectly applied features
+- Optimization opportunities
+
+SECTION 4: GAPS AND RECOMMENDATIONS
+- Critical gaps that must be addressed
+- Content recommendations for TBD sections
+- Additional sections to consider
+- Q&A enhancements needed
+
+SECTION 5: CUSTOMER PRESENTATION NOTES
+- Sections that need clearer business justification
+- Technical jargon to simplify
+- Potential customer concerns to preemptively address
+- Recommended talking points for presentation
+
+SECTION 6: DETAILED FINDINGS BY SECTION
+- Section-by-section technical notes
+- Specific corrections or improvements
+- SQL script modifications (if any)
+
+---
+
+REVIEW CONSTRAINTS
+
+- Base your review strictly on Snowflake 2025 documented capabilities and best practices
+- Do not suggest approaches that conflict with stated Snowflake limitations
+- Consider this is a customer-facing document for enterprise architecture review
+- Assume production deployment with strict SLA requirements
+- Focus on Bronze to Silver transformation only; Gold layer is out of scope
+- Do not introduce external tools or frameworks not already mentioned
+- Provide actionable feedback that can be directly applied to the document
+
+---
+
+Please proceed with your comprehensive technical and structural review of the attached document.
+
+Optional Follow-Up Prompts
+After receiving the initial review, use these for deeper analysis:
+For document structure refinement:
+Based on your review, provide a recommended table of contents with optimal section ordering for customer presentation. Include brief rationale for any reordering suggestions.
+For TBD section content:
+For the sections marked TBD (Data Quality Validation, Monitoring & SLA Management, Disaster Recovery), provide an outline of what content should be included to make this document complete for production deployment.
+For implementation script validation:
+Review the CDC Dynamic Table script (TRAIN_PLAN_LEG_CDC_DT) and the CURR_DT script line by line. Identify any SQL syntax issues, missing configurations, or optimization opportunities specific to Snowflake 2025.
+For Q&A section enhancement:
+What additional questions should be added to the Enterprise Customer Q&A section? Consider questions that architecture review boards, security teams, and data governance stakeholders typically ask about CDC pipelines and Dynamic Tables.Claude is AI and can make mistakes. Please double-check responses.
