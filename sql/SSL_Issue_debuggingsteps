@@ -1,0 +1,112 @@
+Runbook (segregated)
+A) Steps to run in Snowflake (Snowsight/SQL)
+
+Confirm the symptom (sanity check)
+
+In Snowsight, run a tiny query (e.g., select 1) and then a query that returns a large result (many rows/columns). You’re only validating behavior (small succeeds, large fails).
+(No data changes; safe for production.)
+
+Gather the authoritative allowlist
+
+Run:
+
+-- Standard accounts
+SELECT SYSTEM$ALLOWLIST();
+
+-- If you use PrivateLink / Private Service Connect:
+SELECT SYSTEM$ALLOWLIST_PRIVATELINK();
+
+
+This returns all hostnames and ports Snowflake uses for your account/region, including SNOWFLAKE_DEPLOYMENT, STAGE, and OCSP/CRL items. These outputs are what SnowCD and your firewall team should use.
+
+(Optional) Tabularize for review
+
+If you want a neat table in Snowsight:
+
+SELECT t.VALUE:type::VARCHAR  AS type,
+       t.VALUE:host::VARCHAR  AS host,
+       t.VALUE:port           AS port
+FROM TABLE(FLATTEN(input => PARSE_JSON(SYSTEM$ALLOWLIST()))) AS t;
+
+
+(This is straight from the docs example.)
+
+✅ Production-safe note: These steps are read-only; they do not modify objects or permissions.
+
+B) Steps to run on the client / network side (Tosca host, proxy, firewall)
+
+Run SnowCD from the Tosca host
+
+Download and run SnowCD using the JSON you saved from SYSTEM$ALLOWLIST() or …_PRIVATELINK(). SnowCD validates DNS and reachability to every hostname/port (including STAGE endpoints and OCSP). Fix anything marked failed.
+
+Doc note: SnowCD uses the allowlist you generated in step A and explicitly tests stage endpoints such as S3/GCS/Azure forms.
+
+Ensure DNS resolves for stage hosts
+
+From the Tosca network segment, verify that the exact stage hosts listed in your allowlist resolve and connect (examples include …s3.<region>.amazonaws.com, …s3-<region>.amazonaws.com, and …s3.amazonaws.com depending on region). These host patterns are shown in the SnowCD docs examples.
+
+Disable SSL interception (TLS “break-and-inspect”)
+
+Snowflake does not support SSL-terminating proxies. Use SSL pass-through (no decryption) for all allowlisted hosts (core, stage, OCSP).
+
+ODBC: set proxy bypass and turn on diagnostics (one-time while testing)
+
+In the ODBC DSN:
+
+Bypass proxy for stage domains using NoProxy (e.g., add .amazonaws.com and any other stage domains in your allowlist). The Snowflake ODBC driver passes NoProxy to CURLOPT_NOPROXY.
+
+Enable debug logs: set CURLVerboseMode=true, LogLevel=5 (Debug) and LogPath to a writable folder. These are documented ODBC parameters used for network/TLS troubleshooting.
+
+Do not leave DisableOCSPCheck=true enabled; if you briefly toggle it to isolate OCSP issues, revert after testing (this is a documented diagnostic, not a best-practice configuration).
+
+OCSP / port 80 checks
+
+Open outbound TCP 80 for the OCSP endpoints returned by your allowlist (OCSP is over port 80; all Snowflake data traffic remains on 443).
+
+Note: Modern ODBC ≥ 2.15.0 uses OCSP only (not CRL). Your allowlist may still show CRL distribution points (for other clients), but ODBC relies on OCSP.
+
+Retest in this order
+
+Run SnowCD again (expect “All checks passed”).
+
+Re-run the small query → then the large query from Tosca. If it still fails, take the failing ODBC log snippet that shows the exact URL/host and compare to your allowlist/SnowCD results to pinpoint what’s still blocked.
+
+Why this runbook is safe for production
+
+Uses Snowflake’s authoritative allowlist and SnowCD to validate the exact endpoints your account requires. No guesswork.
+
+Enforces the documented requirement for no SSL interception and OCSP on port 80.
+
+ODBC diagnostics settings are documented and reversible; they don’t change data.
+
+Copy-paste blocks
+Snowflake (run in Snowsight)
+-- A.2 Allowlist (standard)
+SELECT SYSTEM$ALLOWLIST();
+
+-- A.2 Allowlist (PrivateLink / PSC / PL)
+SELECT SYSTEM$ALLOWLIST_PRIVATELINK();
+
+-- A.3 Optional: tabular view
+SELECT t.VALUE:type::VARCHAR  AS type,
+       t.VALUE:host::VARCHAR  AS host,
+       t.VALUE:port           AS port
+FROM TABLE(FLATTEN(input => PARSE_JSON(SYSTEM$ALLOWLIST()))) AS t;
+
+
+ODBC (client)
+
+Bypass proxy for stages: Set NoProxy=.amazonaws.com (and any other stage domains in your allowlist).
+
+Enable logs temporarily: CURLVerboseMode=true, LogLevel=5, LogPath=C:\temp\sfodbc-logs. Revert after diagnosis.
+
+Do not rely on DisableOCSPCheck (temporary only if isolating an OCSP outage): DisableOCSPCheck=false for steady state.
+
+Two quick confirmations I need from you
+
+Are you using PrivateLink to reach Snowflake? (If yes, we’ll use SYSTEM$ALLOWLIST_PRIVATELINK() output for SnowCD.)
+
+https://docs.snowflake.com/en/developer-guide/odbc/odbc
+https://docs.snowflake.com/en/user-guide/client-connectivity-troubleshooting/common-issues
+
+What ODBC driver version and OS does the Tosca host use? (Docs: install/config guidance and supported parameters vary slightly by platform.)
