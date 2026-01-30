@@ -41,3 +41,25 @@ SHOW SECRETS IN SCHEMA OPENFLOW.SECRETS;
 -- Network rule: POSTGRES_NETWORK_RULE (Active)
 -- Integration: OPENFLOW_POSTGRES_ACCESS (Enabled)
 -- Secret: POSTGRES_CDC_SECRET (Created)
+
+
+=====
+-- ============================================
+-- CORRECTED NETWORK RULE FOR PRIVATE CONNECTIVITY
+-- PostgreSQL CDC via PrivateLink/OpenFlow SPCS
+-- ============================================
+
+USE ROLE ACCOUNTADMIN;
+
+-- Create schema if not exists
+CREATE SCHEMA IF NOT EXISTS OPENFLOW.NETWORKS;
+
+-- CORRECTED: Use PRIVATE_HOST_PORT for PrivateLink connectivity
+CREATE OR REPLACE NETWORK RULE OPENFLOW.NETWORKS.POSTGRES_NETWORK_RULE
+  MODE = EGRESS
+  TYPE = PRIVATE_HOST_PORT
+  VALUE_LIST = ('datalake-dbcluster.cluster-cvmpafjeelau.us-west-2.rds.amazonaws.com');
+
+-- Verify creation
+SHOW NETWORK RULES IN SCHEMA OPENFLOW.NETWORKS;
+DESC NETWORK RULE OPENFLOW.NETWORKS.POSTGRES_NETWORK_RULE;
