@@ -1,0 +1,27 @@
+Consider you're a snowflake architect and working for a customer.
+
+you have a scenario where your ingestion tool—Informatica IDMC as part of the CDC data— 
+it would process data into the _base table and capture the cdc _log table as per for our configuration; it would merge cdc data into the _base table. 
+their it would apply the soft delete and deduplication
+so once merge happened, _base having the current state 
+
+now issue : there is a chance when redeploying the IDMC job it will truncate the source table _base and _log so data loss will happening (from the actual source side, the customer would maintain 45 days of data  so they wil lose the history).
+
+for that customer want to prevent the data in Snowflake from being stored in the Snowflake physical table (please find the attached image for architecture reference).
+
+what would be the snowflake-standard best practices approach? 
+
+My approach would be create a stream on _base tables, write merge statement and identify the insert, update, and delete using key load into the Snowflake data prevent table and schedule a task to load data 
+
+Can you please write a script for me using Snowflake best practices with some examples?
+
+Also answer this question - after some somedays if the IDMC job would redeploy and truncate the _base table data ..
+how it would work our data prevent table 
+how it load newly loaded data into _base to data prevent table  
+
+
+
+
+ we forget one main consideration 
+When it's run the first time my stream has to pick complete data set from the _base table and load into the data-preserved table; from there, it has to handle the cdc 
+can you please update the script accordingly? 
