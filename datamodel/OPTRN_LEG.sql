@@ -85,29 +85,34 @@ DECLARE
     v_staging_count NUMBER DEFAULT 0;
     v_rows_merged NUMBER DEFAULT 0;
     v_result VARCHAR;
+    v_error_msg VARCHAR;
 BEGIN
     v_batch_id := 'BATCH_' || TO_VARCHAR(CURRENT_TIMESTAMP(), 'YYYYMMDD_HH24MISS');
     
     -- =========================================================================
     -- CHECK 1: Detect if stream is stale (happens after IDMC truncate/reload)
+    -- Correct approach: Try to query the stream - stale streams throw errors
     -- =========================================================================
     BEGIN
-        SHOW STREAMS LIKE 'OPTRN_LEG_BASE_STREAM' IN SCHEMA D_BRONZE.SADB;
+        -- Attempt to check stream - stale streams will throw an error
+        SELECT COUNT(*) INTO v_staging_count 
+        FROM D_BRONZE.SADB.OPTRN_LEG_BASE_STREAM
+        WHERE 1=0;  -- No data retrieval, just validates stream is readable
         
-        SELECT "stale"::BOOLEAN INTO v_stream_stale
-        FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
-        WHERE "name" = 'OPTRN_LEG_BASE_STREAM';
+        v_stream_stale := FALSE;
         
     EXCEPTION
         WHEN OTHER THEN
+            -- Stream is stale or has issues - error message contains 'stale'
             v_stream_stale := TRUE;
+            v_error_msg := SQLERRM;
     END;
     
     -- =========================================================================
     -- RECOVERY: If stream is stale, recreate it and do differential load
     -- =========================================================================
     IF (v_stream_stale = TRUE) THEN
-        v_result := 'STREAM_STALE_DETECTED - Initiating recovery at ' || CURRENT_TIMESTAMP()::VARCHAR;
+        v_result := 'STREAM_STALE_DETECTED: ' || NVL(v_error_msg, 'Unknown') || ' - Initiating recovery at ' || CURRENT_TIMESTAMP()::VARCHAR;
         
         CREATE OR REPLACE STREAM D_BRONZE.SADB.OPTRN_LEG_BASE_STREAM
         ON TABLE D_BRONZE.SADB.OPTRN_LEG_BASE
@@ -271,12 +276,14 @@ END;
 $$;
 
 -- =============================================================================
--- STEP 5: Create Scheduled Task to Process CDC Data
+-- STEP 5: Create Scheduled Task to Process CDC Data (Enhanced Configuration)
 -- =============================================================================
 CREATE OR REPLACE TASK D_BRONZE.SADB.TASK_PROCESS_OPTRN_LEG_CDC
     WAREHOUSE = INFA_INGEST_WH
     SCHEDULE = '5 MINUTE'
     ALLOW_OVERLAPPING_EXECUTION = FALSE
+    SUSPEND_TASK_AFTER_NUM_FAILURES = 3
+    USER_TASK_TIMEOUT_MS = 3600000
     COMMENT = 'Task to process OPTRN_LEG_BASE CDC changes into data preservation table'
 WHEN
     SYSTEM$STREAM_HAS_DATA('D_BRONZE.SADB.OPTRN_LEG_BASE_STREAM')
