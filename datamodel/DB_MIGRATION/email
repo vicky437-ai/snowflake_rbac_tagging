@@ -1,0 +1,34 @@
+Here's a concise customer email:
+
+Subject: Database Layer Reorganization - Recommended Approach
+
+Hi Team,
+
+Following our discussion on separating the raw data layer (D_RAW) from the preservation layer (D_BRONZE), I've evaluated two approaches:
+
+Option 1: DB RENAME
+
+Pros	Cons
+Simpler - single command	IDMC connection needs update
+Grants follow automatically	Must create new D_BRONZE after
+No re-granting needed	
+Option 2: DB CLONE
+
+Pros	Cons
+Original DB stays intact	Grants do NOT transfer
+Easy rollback	Need to re-grant all permissions
+More complex setup
+Quick Comparison:
+
+Criteria	RENAME	CLONE
+Complexity	⭐ Simple	⭐⭐⭐ Complex
+Grants	Auto-follow	Need re-grant
+Best for	Early development	Production
+
+Recommendation: Since we're in the early development stage with minimal objects and no V1 tables yet, I recommend the DB RENAME approach. It's simpler, faster, and grants transfer automatically.
+
+The only action required would be updating the IDMC connection from D_BRONZE to D_RAW after the rename.
+
+Let me know if you have any questions or would like to discuss further.
+
+Best regards
