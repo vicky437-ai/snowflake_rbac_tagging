@@ -1,0 +1,12 @@
+Thank you for outlining the proposed approach for introducing the D_RAW database for CDC ingestion and explaining how it will interact with D_BRONZE. After reviewing the design with my team, we had a few questions to ensure we are fully aligned:
+
+ 
+
+Is there a specific reason we cannot create dedicated RAW schemas within the existing D_BRONZE database (for BASE/LOG and CDC objects) instead of introducing an entirely new database?
+How does the proposed D_RAW layer align with our current Medallion architecture, where BRONZE already represents raw ingestion?
+ 
+
+Our team’s main question is:
+
+
+Even if we introduce D_RAW as a separate layer, the benefits appear limited. Therefore, why not create separate schemas within D_BRONZE itself to store RAW data, which would still align with the principles of the Medallion architecture?
