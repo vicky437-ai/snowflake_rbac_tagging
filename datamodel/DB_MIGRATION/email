@@ -32,3 +32,110 @@ The only action required would be updating the IDMC connection from D_BRONZE to 
 Let me know if you have any questions or would like to discuss further.
 
 Best regards
+
+==================
+Hi Team Good morning,
+
+ 
+
+I have evaluated two approaches for on separating the raw data layer (D_RAW) from the preservation layer (D_BRONZE).
+
+ 
+
+Option 1 :  DB RENAME
+
+Pros
+
+Cons
+
+Simpler - Couple of commands
+
+IDMC connection needs update
+
+Grants follow automatically
+
+Create new D_BRONZE and required Schema's after
+
+No re-granting needed
+
+ 
+
+ 
+
+Option 2 :  DB CLONE
+
+Pros
+
+Cons
+
+Original DB stays intact
+
+Grants do NOT transfer
+
+Easy rollback
+
+Need to re-grant all permissions
+
+ 
+
+More complex setup
+
+ 
+
+ 
+
+Quick Comparison
+
+Criteria
+
+RENAME
+
+CLONE
+
+Complexity
+
+Simple
+
+Complex
+
+Grants
+
+Auto-follow
+
+Need re-grant
+
+Best for
+
+Early development Stage
+
+Production
+
+ 
+
+My Suggestion : Since we are in the early development stage with minimal objects , I  would suggest to the DB RENAME approach. It is  simpler, faster, and grants transfer automatically.
+
+ 
+
+The only action required would be updating the IDMC connection from D_BRONZE to D_RAW for impacted jobs.
+
+ 
+
+Regads,
+
+Babu
+
+Thank you for joining the call on short notice to discuss and align on our approach for CDC operations in Snowflake. As agreed, we will move forward with creating a separate database (D_RAWCDC) to host the BASE and LOG tables, along with the associated Streams, Tasks, and Procedures. These components will be used to merge data and push changes (deltas) into the main table in the BRONZE layer.
+
+ 
+
+Vishal and team, if you have a different name that you’d prefer for this new DB, please make your suggestion. 
+
+ 
+
+Babu and Naveen will discuss on the best approach to set up this new database and communicate the plan to this group. 
+
+ 
+
+Thanks,
+
+David
