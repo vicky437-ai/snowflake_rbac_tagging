@@ -53,5 +53,43 @@
 
   Please let me know your thoughts.
 
+ Option A (Conversational)
+
+  Since we're in early development and data reload is expected anyway once IDMC connection changes, I'd go with Option 2. Cleaner approach, no baggage from old setup.
+
+  Next steps would be:
+
+  • Clear existing SADB and AWS objects from D_BRONZE
+  • Create D_RAWCDC with SADB and AWS schemas
+  • Point IDMC to the new DB
+  • Reload data
+
+  ────────────────────────────────────────
+
+  Option B (Direct)
+
+  My recommendation is Option 2. We're still in development, and IDMC connection update will require data reload regardless. Makes sense to start fresh.
+
+  To proceed:
+
+  • Drop existing SADB & AWS schemas from D_BRONZE
+  • Setup D_RAWCDC database (SADB & AWS schemas)
+  • Update IDMC target connection
+  • Trigger data reload
+
+  ────────────────────────────────────────
+
+  Option C (Brief)
+
+  Given we're in dev stage and reload is inevitable after connection change, Option 2 makes more sense. Fresh setup, no complications.
+
+  Actions:
+
+  • Cleanup SADB & AWS in D_BRONZE
+  • New DB & schemas creation
+  • IDMC connection update
+  • Data reload
+
+
   Regards,
   Babu
