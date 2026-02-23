@@ -1,0 +1,655 @@
+/*
+================================================================================
+DATA PRESERVATION SCRIPT FOR D_RAW.SADB.LCMTV_EMIS_BASE
+================================================================================
+Source Table : D_RAW.SADB.LCMTV_EMIS_BASE
+Target Table : D_BRONZE.SADB.LCMTV_EMIS
+Stream       : D_RAW.SADB.LCMTV_EMIS_BASE_HIST_STREAM
+Procedure    : D_RAW.SADB.SP_PROCESS_LCMTV_EMIS()
+Task         : D_RAW.SADB.TASK_PROCESS_LCMTV_EMIS
+Primary Key  : MARK_CD, EQPUN_NBR (Composite - 2)
+Total Columns: 84 source + 6 CDC metadata = 90
+================================================================================
+*/
+
+-- =============================================================================
+-- STEP 1: Create Target Data Preservation Table
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS D_BRONZE.SADB.LCMTV_EMIS (
+    MARK_CD VARCHAR(16) NOT NULL,
+    EQPUN_NBR VARCHAR(40) NOT NULL,
+    AIR_BRAKE_HOOKP_CD VARCHAR(4),
+    AIR_BRAKE_MDL_NBR VARCHAR(20),
+    AIR_CNDTN_IND VARCHAR(4),
+    ALGN_CNTRL_CPLR_CD VARCHAR(4),
+    ATCS_CD VARCHAR(12),
+    AXLE_CT NUMBER(5,0),
+    BRNG_TYPE_CD VARCHAR(4),
+    CAB_HEATER_CD VARCHAR(4),
+    CAB_SIGNAL_CD VARCHAR(4),
+    CLRNC_PLATE_CD VARCHAR(4),
+    CPLR_A_END_TYPE_CD VARCHAR(32),
+    CPLR_B_END_TYPE_CD VARCHAR(32),
+    CSTMS_CD VARCHAR(4),
+    DYN_BRK_INTLK_IND VARCHAR(4),
+    DYN_BRK_MAX_EF_QTY NUMBER(5,0),
+    DYN_BRK_TYPE_CD VARCHAR(4),
+    FUEL_CPCTY_QTY NUMBER(5,0),
+    FUEL_PRHTR_IND VARCHAR(4),
+    FUEL_SHTF_CD VARCHAR(4),
+    FUEL_SVR_MNFCTR_CD VARCHAR(4),
+    FULL_WEIGHT_QTY NUMBER(10,0),
+    GEAR_AXL_TEETH_QTY NUMBER(5,0),
+    GRND_RELAY_RST_CD VARCHAR(4),
+    HOOD_CNFGRT_CD VARCHAR(4),
+    HRSPWR_QTY NUMBER(5,0),
+    IND_PRSR_SWTCH_IND VARCHAR(4),
+    INTRNT_SRVC_CD VARCHAR(4),
+    JMPR_CBL_CNCTN_CD VARCHAR(4),
+    LOW_IDLE_IND VARCHAR(4),
+    MNM_CNTNS_SPD_QTY NUMBER(5,0),
+    MNM_CRV_50_FT_QTY NUMBER(5,0),
+    MNM_CRV_MLTPL_QTY NUMBER(5,0),
+    MNM_CRV_SNGL_QTY NUMBER(5,0),
+    MODEL_NBR VARCHAR(32),
+    MXM_SPEED_QTY NUMBER(5,0),
+    OPRT_BRAKE_CT NUMBER(5,0),
+    PNLTY_AIR_BRAKE_CD VARCHAR(4),
+    PNM_CTRL_DELAY_CD VARCHAR(8),
+    PNM_DYNMC_DLY_CD VARCHAR(8),
+    PNM_PNLTY_DLY_CD VARCHAR(8),
+    PNM_UNCTRL_DLY_CD VARCHAR(8),
+    PNN_GEAR_TEETH_QTY NUMBER(5,0),
+    RADIO_MNFCTR_CD VARCHAR(4),
+    RADIO_MODEL_NBR VARCHAR(40),
+    SAFETY_CNTRL_CD VARCHAR(4),
+    SAND_CPCTY_QTY NUMBER(5,0),
+    SNW_PLW_HGHT_A_CD VARCHAR(4),
+    SNW_PLW_HGHT_B_CD VARCHAR(4),
+    SPARK_ARSTR_CD VARCHAR(4),
+    SPEED_TAPE_CNTL_CD VARCHAR(4),
+    STNG_CPCTY_CD VARCHAR(4),
+    STRTR_TYPE_CD VARCHAR(4),
+    TOILET_TYPE_CD VARCHAR(4),
+    TRCTN_MTR_CUT_IND VARCHAR(4),
+    TRCTN_MTR_TYPE_CD VARCHAR(8),
+    TRUCK_CNTR_LGT_QTY NUMBER(5,0),
+    WATER_COOLER_CD VARCHAR(4),
+    WATER_DRAIN_IND VARCHAR(4),
+    WHEEL_SIZE_QTY NUMBER(5,0),
+    RECORD_CREATE_DT TIMESTAMP_NTZ(0),
+    RECORD_UPDATE_TMS TIMESTAMP_NTZ(0),
+    RECORD_UPDATE_TMS_NBR NUMBER(6,0),
+    SPEED_TAPE_CD VARCHAR(4),
+    TRUCK_MNFCTR_CD VARCHAR(4),
+    ENGNR_SEAT_TYPE_CD VARCHAR(4),
+    BLDR_CD VARCHAR(4),
+    END_TRAIN_INFO_SYSTEM_CD VARCHAR(4),
+    ETIS_MNTNG_TYPE_CD VARCHAR(4),
+    CLU_INITIAL_CD VARCHAR(16),
+    CLU_SERIAL_NBR NUMBER(6,0),
+    IDU_INITIAL_SERIAL_CD VARCHAR(16),
+    IDU_SERIAL_NBR NUMBER(6,0),
+    LCMTV_TRUCK_TYPE_CD VARCHAR(8),
+    POWER_AXLE_QTY NUMBER(5,0),
+    LCMTV_FRA_INSPECT_DT TIMESTAMP_NTZ(0),
+    LCMTV_CTC_INSPECT_DT TIMESTAMP_NTZ(0),
+    CREATE_USER_ID VARCHAR(32),
+    UPDATE_USER_ID VARCHAR(32),
+    CODED_CAB_SIGNAL_CD VARCHAR(4),
+    LCMTV_STRTR_TYPE_CD VARCHAR(4),
+    SNW_OPERATION_TYPE VARCHAR(1),
+    SNW_LAST_REPLICATED TIMESTAMP_NTZ(9),
+
+    CDC_OPERATION VARCHAR(10),  
+    CDC_TIMESTAMP TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    IS_DELETED BOOLEAN DEFAULT FALSE,
+    RECORD_CREATED_AT TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    RECORD_UPDATED_AT TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    SOURCE_LOAD_BATCH_ID VARCHAR(100), 
+
+    PRIMARY KEY (MARK_CD, EQPUN_NBR)
+);
+
+-- =============================================================================
+-- STEP 2: Enable Change Tracking on Source Table
+-- =============================================================================
+ALTER TABLE D_RAW.SADB.LCMTV_EMIS_BASE 
+SET CHANGE_TRACKING = TRUE,
+    DATA_RETENTION_TIME_IN_DAYS = 45,
+    MAX_DATA_EXTENSION_TIME_IN_DAYS = 15;
+
+-- =============================================================================
+-- STEP 3: Create Stream with SHOW_INITIAL_ROWS for Initial Load
+-- =============================================================================
+CREATE OR REPLACE STREAM D_RAW.SADB.LCMTV_EMIS_BASE_HIST_STREAM
+ON TABLE D_RAW.SADB.LCMTV_EMIS_BASE
+SHOW_INITIAL_ROWS = TRUE
+COMMENT = 'CDC Stream for LCMTV_EMIS_BASE data preservation. SHOW_INITIAL_ROWS=TRUE for initial load.';
+
+-- =============================================================================
+-- STEP 4: Create Stored Procedure for CDC Processing
+-- =============================================================================
+CREATE OR REPLACE PROCEDURE D_RAW.SADB.SP_PROCESS_LCMTV_EMIS()
+RETURNS VARCHAR
+LANGUAGE SQL
+EXECUTE AS CALLER
+AS
+$$
+DECLARE
+    v_batch_id VARCHAR;
+    v_stream_stale BOOLEAN DEFAULT FALSE;
+    v_staging_count NUMBER DEFAULT 0;
+    v_rows_merged NUMBER DEFAULT 0;
+    v_result VARCHAR;
+    v_error_msg VARCHAR;
+BEGIN
+    v_batch_id := 'BATCH_' || TO_VARCHAR(CURRENT_TIMESTAMP(), 'YYYYMMDD_HH24MISS');
+    
+    -- =========================================================================
+    -- CHECK 1: Detect if stream is stale (happens after IDMC truncate/reload)
+    -- =========================================================================
+    BEGIN
+        SELECT COUNT(*) INTO v_staging_count 
+        FROM D_RAW.SADB.LCMTV_EMIS_BASE_HIST_STREAM
+        WHERE 1=0;
+        
+        v_stream_stale := FALSE;
+        
+    EXCEPTION
+        WHEN OTHER THEN
+            v_stream_stale := TRUE;
+            v_error_msg := SQLERRM;
+    END;
+    
+    -- =========================================================================
+    -- RECOVERY: If stream is stale, recreate it and do differential load
+    -- =========================================================================
+    IF (v_stream_stale = TRUE) THEN
+        v_result := 'STREAM_STALE_DETECTED: ' || NVL(v_error_msg, 'Unknown') || ' - Initiating recovery at ' || CURRENT_TIMESTAMP()::VARCHAR;
+        
+        CREATE OR REPLACE STREAM D_RAW.SADB.LCMTV_EMIS_BASE_HIST_STREAM
+        ON TABLE D_RAW.SADB.LCMTV_EMIS_BASE
+        SHOW_INITIAL_ROWS = TRUE
+        COMMENT = 'CDC Stream recreated after staleness detection';
+        
+        MERGE INTO D_BRONZE.SADB.LCMTV_EMIS AS tgt
+        USING (
+            SELECT 
+                src.*,
+                'INSERT' AS CDC_OP,
+                :v_batch_id AS BATCH_ID
+            FROM D_RAW.SADB.LCMTV_EMIS_BASE src
+            LEFT JOIN D_BRONZE.SADB.LCMTV_EMIS tgt 
+                ON src.MARK_CD = tgt.MARK_CD
+               AND src.EQPUN_NBR = tgt.EQPUN_NBR
+            WHERE tgt.MARK_CD IS NULL
+               OR tgt.IS_DELETED = TRUE
+        ) AS src
+        ON tgt.MARK_CD = src.MARK_CD
+       AND tgt.EQPUN_NBR = src.EQPUN_NBR
+        WHEN MATCHED THEN UPDATE SET
+            tgt.AIR_BRAKE_HOOKP_CD = src.AIR_BRAKE_HOOKP_CD,
+            tgt.AIR_BRAKE_MDL_NBR = src.AIR_BRAKE_MDL_NBR,
+            tgt.AIR_CNDTN_IND = src.AIR_CNDTN_IND,
+            tgt.ALGN_CNTRL_CPLR_CD = src.ALGN_CNTRL_CPLR_CD,
+            tgt.ATCS_CD = src.ATCS_CD,
+            tgt.AXLE_CT = src.AXLE_CT,
+            tgt.BRNG_TYPE_CD = src.BRNG_TYPE_CD,
+            tgt.CAB_HEATER_CD = src.CAB_HEATER_CD,
+            tgt.CAB_SIGNAL_CD = src.CAB_SIGNAL_CD,
+            tgt.CLRNC_PLATE_CD = src.CLRNC_PLATE_CD,
+            tgt.CPLR_A_END_TYPE_CD = src.CPLR_A_END_TYPE_CD,
+            tgt.CPLR_B_END_TYPE_CD = src.CPLR_B_END_TYPE_CD,
+            tgt.CSTMS_CD = src.CSTMS_CD,
+            tgt.DYN_BRK_INTLK_IND = src.DYN_BRK_INTLK_IND,
+            tgt.DYN_BRK_MAX_EF_QTY = src.DYN_BRK_MAX_EF_QTY,
+            tgt.DYN_BRK_TYPE_CD = src.DYN_BRK_TYPE_CD,
+            tgt.FUEL_CPCTY_QTY = src.FUEL_CPCTY_QTY,
+            tgt.FUEL_PRHTR_IND = src.FUEL_PRHTR_IND,
+            tgt.FUEL_SHTF_CD = src.FUEL_SHTF_CD,
+            tgt.FUEL_SVR_MNFCTR_CD = src.FUEL_SVR_MNFCTR_CD,
+            tgt.FULL_WEIGHT_QTY = src.FULL_WEIGHT_QTY,
+            tgt.GEAR_AXL_TEETH_QTY = src.GEAR_AXL_TEETH_QTY,
+            tgt.GRND_RELAY_RST_CD = src.GRND_RELAY_RST_CD,
+            tgt.HOOD_CNFGRT_CD = src.HOOD_CNFGRT_CD,
+            tgt.HRSPWR_QTY = src.HRSPWR_QTY,
+            tgt.IND_PRSR_SWTCH_IND = src.IND_PRSR_SWTCH_IND,
+            tgt.INTRNT_SRVC_CD = src.INTRNT_SRVC_CD,
+            tgt.JMPR_CBL_CNCTN_CD = src.JMPR_CBL_CNCTN_CD,
+            tgt.LOW_IDLE_IND = src.LOW_IDLE_IND,
+            tgt.MNM_CNTNS_SPD_QTY = src.MNM_CNTNS_SPD_QTY,
+            tgt.MNM_CRV_50_FT_QTY = src.MNM_CRV_50_FT_QTY,
+            tgt.MNM_CRV_MLTPL_QTY = src.MNM_CRV_MLTPL_QTY,
+            tgt.MNM_CRV_SNGL_QTY = src.MNM_CRV_SNGL_QTY,
+            tgt.MODEL_NBR = src.MODEL_NBR,
+            tgt.MXM_SPEED_QTY = src.MXM_SPEED_QTY,
+            tgt.OPRT_BRAKE_CT = src.OPRT_BRAKE_CT,
+            tgt.PNLTY_AIR_BRAKE_CD = src.PNLTY_AIR_BRAKE_CD,
+            tgt.PNM_CTRL_DELAY_CD = src.PNM_CTRL_DELAY_CD,
+            tgt.PNM_DYNMC_DLY_CD = src.PNM_DYNMC_DLY_CD,
+            tgt.PNM_PNLTY_DLY_CD = src.PNM_PNLTY_DLY_CD,
+            tgt.PNM_UNCTRL_DLY_CD = src.PNM_UNCTRL_DLY_CD,
+            tgt.PNN_GEAR_TEETH_QTY = src.PNN_GEAR_TEETH_QTY,
+            tgt.RADIO_MNFCTR_CD = src.RADIO_MNFCTR_CD,
+            tgt.RADIO_MODEL_NBR = src.RADIO_MODEL_NBR,
+            tgt.SAFETY_CNTRL_CD = src.SAFETY_CNTRL_CD,
+            tgt.SAND_CPCTY_QTY = src.SAND_CPCTY_QTY,
+            tgt.SNW_PLW_HGHT_A_CD = src.SNW_PLW_HGHT_A_CD,
+            tgt.SNW_PLW_HGHT_B_CD = src.SNW_PLW_HGHT_B_CD,
+            tgt.SPARK_ARSTR_CD = src.SPARK_ARSTR_CD,
+            tgt.SPEED_TAPE_CNTL_CD = src.SPEED_TAPE_CNTL_CD,
+            tgt.STNG_CPCTY_CD = src.STNG_CPCTY_CD,
+            tgt.STRTR_TYPE_CD = src.STRTR_TYPE_CD,
+            tgt.TOILET_TYPE_CD = src.TOILET_TYPE_CD,
+            tgt.TRCTN_MTR_CUT_IND = src.TRCTN_MTR_CUT_IND,
+            tgt.TRCTN_MTR_TYPE_CD = src.TRCTN_MTR_TYPE_CD,
+            tgt.TRUCK_CNTR_LGT_QTY = src.TRUCK_CNTR_LGT_QTY,
+            tgt.WATER_COOLER_CD = src.WATER_COOLER_CD,
+            tgt.WATER_DRAIN_IND = src.WATER_DRAIN_IND,
+            tgt.WHEEL_SIZE_QTY = src.WHEEL_SIZE_QTY,
+            tgt.RECORD_CREATE_DT = src.RECORD_CREATE_DT,
+            tgt.RECORD_UPDATE_TMS = src.RECORD_UPDATE_TMS,
+            tgt.RECORD_UPDATE_TMS_NBR = src.RECORD_UPDATE_TMS_NBR,
+            tgt.SPEED_TAPE_CD = src.SPEED_TAPE_CD,
+            tgt.TRUCK_MNFCTR_CD = src.TRUCK_MNFCTR_CD,
+            tgt.ENGNR_SEAT_TYPE_CD = src.ENGNR_SEAT_TYPE_CD,
+            tgt.BLDR_CD = src.BLDR_CD,
+            tgt.END_TRAIN_INFO_SYSTEM_CD = src.END_TRAIN_INFO_SYSTEM_CD,
+            tgt.ETIS_MNTNG_TYPE_CD = src.ETIS_MNTNG_TYPE_CD,
+            tgt.CLU_INITIAL_CD = src.CLU_INITIAL_CD,
+            tgt.CLU_SERIAL_NBR = src.CLU_SERIAL_NBR,
+            tgt.IDU_INITIAL_SERIAL_CD = src.IDU_INITIAL_SERIAL_CD,
+            tgt.IDU_SERIAL_NBR = src.IDU_SERIAL_NBR,
+            tgt.LCMTV_TRUCK_TYPE_CD = src.LCMTV_TRUCK_TYPE_CD,
+            tgt.POWER_AXLE_QTY = src.POWER_AXLE_QTY,
+            tgt.LCMTV_FRA_INSPECT_DT = src.LCMTV_FRA_INSPECT_DT,
+            tgt.LCMTV_CTC_INSPECT_DT = src.LCMTV_CTC_INSPECT_DT,
+            tgt.CREATE_USER_ID = src.CREATE_USER_ID,
+            tgt.UPDATE_USER_ID = src.UPDATE_USER_ID,
+            tgt.CODED_CAB_SIGNAL_CD = src.CODED_CAB_SIGNAL_CD,
+            tgt.LCMTV_STRTR_TYPE_CD = src.LCMTV_STRTR_TYPE_CD,
+            tgt.SNW_OPERATION_TYPE = src.SNW_OPERATION_TYPE,
+            tgt.SNW_LAST_REPLICATED = src.SNW_LAST_REPLICATED,
+            tgt.CDC_OPERATION = 'RELOADED',
+            tgt.CDC_TIMESTAMP = CURRENT_TIMESTAMP(),
+            tgt.IS_DELETED = FALSE,
+            tgt.RECORD_UPDATED_AT = CURRENT_TIMESTAMP(),
+            tgt.SOURCE_LOAD_BATCH_ID = src.BATCH_ID
+        WHEN NOT MATCHED THEN INSERT (
+            MARK_CD, EQPUN_NBR, AIR_BRAKE_HOOKP_CD, AIR_BRAKE_MDL_NBR, AIR_CNDTN_IND,
+            ALGN_CNTRL_CPLR_CD, ATCS_CD, AXLE_CT, BRNG_TYPE_CD, CAB_HEATER_CD,
+            CAB_SIGNAL_CD, CLRNC_PLATE_CD, CPLR_A_END_TYPE_CD, CPLR_B_END_TYPE_CD, CSTMS_CD,
+            DYN_BRK_INTLK_IND, DYN_BRK_MAX_EF_QTY, DYN_BRK_TYPE_CD, FUEL_CPCTY_QTY, FUEL_PRHTR_IND,
+            FUEL_SHTF_CD, FUEL_SVR_MNFCTR_CD, FULL_WEIGHT_QTY, GEAR_AXL_TEETH_QTY, GRND_RELAY_RST_CD,
+            HOOD_CNFGRT_CD, HRSPWR_QTY, IND_PRSR_SWTCH_IND, INTRNT_SRVC_CD, JMPR_CBL_CNCTN_CD,
+            LOW_IDLE_IND, MNM_CNTNS_SPD_QTY, MNM_CRV_50_FT_QTY, MNM_CRV_MLTPL_QTY, MNM_CRV_SNGL_QTY,
+            MODEL_NBR, MXM_SPEED_QTY, OPRT_BRAKE_CT, PNLTY_AIR_BRAKE_CD, PNM_CTRL_DELAY_CD,
+            PNM_DYNMC_DLY_CD, PNM_PNLTY_DLY_CD, PNM_UNCTRL_DLY_CD, PNN_GEAR_TEETH_QTY, RADIO_MNFCTR_CD,
+            RADIO_MODEL_NBR, SAFETY_CNTRL_CD, SAND_CPCTY_QTY, SNW_PLW_HGHT_A_CD, SNW_PLW_HGHT_B_CD,
+            SPARK_ARSTR_CD, SPEED_TAPE_CNTL_CD, STNG_CPCTY_CD, STRTR_TYPE_CD, TOILET_TYPE_CD,
+            TRCTN_MTR_CUT_IND, TRCTN_MTR_TYPE_CD, TRUCK_CNTR_LGT_QTY, WATER_COOLER_CD, WATER_DRAIN_IND,
+            WHEEL_SIZE_QTY, RECORD_CREATE_DT, RECORD_UPDATE_TMS, RECORD_UPDATE_TMS_NBR, SPEED_TAPE_CD,
+            TRUCK_MNFCTR_CD, ENGNR_SEAT_TYPE_CD, BLDR_CD, END_TRAIN_INFO_SYSTEM_CD, ETIS_MNTNG_TYPE_CD,
+            CLU_INITIAL_CD, CLU_SERIAL_NBR, IDU_INITIAL_SERIAL_CD, IDU_SERIAL_NBR, LCMTV_TRUCK_TYPE_CD,
+            POWER_AXLE_QTY, LCMTV_FRA_INSPECT_DT, LCMTV_CTC_INSPECT_DT, CREATE_USER_ID, UPDATE_USER_ID,
+            CODED_CAB_SIGNAL_CD, LCMTV_STRTR_TYPE_CD, SNW_OPERATION_TYPE, SNW_LAST_REPLICATED,
+            CDC_OPERATION, CDC_TIMESTAMP, IS_DELETED, RECORD_CREATED_AT, RECORD_UPDATED_AT, SOURCE_LOAD_BATCH_ID
+        ) VALUES (
+            src.MARK_CD, src.EQPUN_NBR, src.AIR_BRAKE_HOOKP_CD, src.AIR_BRAKE_MDL_NBR, src.AIR_CNDTN_IND,
+            src.ALGN_CNTRL_CPLR_CD, src.ATCS_CD, src.AXLE_CT, src.BRNG_TYPE_CD, src.CAB_HEATER_CD,
+            src.CAB_SIGNAL_CD, src.CLRNC_PLATE_CD, src.CPLR_A_END_TYPE_CD, src.CPLR_B_END_TYPE_CD, src.CSTMS_CD,
+            src.DYN_BRK_INTLK_IND, src.DYN_BRK_MAX_EF_QTY, src.DYN_BRK_TYPE_CD, src.FUEL_CPCTY_QTY, src.FUEL_PRHTR_IND,
+            src.FUEL_SHTF_CD, src.FUEL_SVR_MNFCTR_CD, src.FULL_WEIGHT_QTY, src.GEAR_AXL_TEETH_QTY, src.GRND_RELAY_RST_CD,
+            src.HOOD_CNFGRT_CD, src.HRSPWR_QTY, src.IND_PRSR_SWTCH_IND, src.INTRNT_SRVC_CD, src.JMPR_CBL_CNCTN_CD,
+            src.LOW_IDLE_IND, src.MNM_CNTNS_SPD_QTY, src.MNM_CRV_50_FT_QTY, src.MNM_CRV_MLTPL_QTY, src.MNM_CRV_SNGL_QTY,
+            src.MODEL_NBR, src.MXM_SPEED_QTY, src.OPRT_BRAKE_CT, src.PNLTY_AIR_BRAKE_CD, src.PNM_CTRL_DELAY_CD,
+            src.PNM_DYNMC_DLY_CD, src.PNM_PNLTY_DLY_CD, src.PNM_UNCTRL_DLY_CD, src.PNN_GEAR_TEETH_QTY, src.RADIO_MNFCTR_CD,
+            src.RADIO_MODEL_NBR, src.SAFETY_CNTRL_CD, src.SAND_CPCTY_QTY, src.SNW_PLW_HGHT_A_CD, src.SNW_PLW_HGHT_B_CD,
+            src.SPARK_ARSTR_CD, src.SPEED_TAPE_CNTL_CD, src.STNG_CPCTY_CD, src.STRTR_TYPE_CD, src.TOILET_TYPE_CD,
+            src.TRCTN_MTR_CUT_IND, src.TRCTN_MTR_TYPE_CD, src.TRUCK_CNTR_LGT_QTY, src.WATER_COOLER_CD, src.WATER_DRAIN_IND,
+            src.WHEEL_SIZE_QTY, src.RECORD_CREATE_DT, src.RECORD_UPDATE_TMS, src.RECORD_UPDATE_TMS_NBR, src.SPEED_TAPE_CD,
+            src.TRUCK_MNFCTR_CD, src.ENGNR_SEAT_TYPE_CD, src.BLDR_CD, src.END_TRAIN_INFO_SYSTEM_CD, src.ETIS_MNTNG_TYPE_CD,
+            src.CLU_INITIAL_CD, src.CLU_SERIAL_NBR, src.IDU_INITIAL_SERIAL_CD, src.IDU_SERIAL_NBR, src.LCMTV_TRUCK_TYPE_CD,
+            src.POWER_AXLE_QTY, src.LCMTV_FRA_INSPECT_DT, src.LCMTV_CTC_INSPECT_DT, src.CREATE_USER_ID, src.UPDATE_USER_ID,
+            src.CODED_CAB_SIGNAL_CD, src.LCMTV_STRTR_TYPE_CD, src.SNW_OPERATION_TYPE, src.SNW_LAST_REPLICATED,
+            'INSERT', CURRENT_TIMESTAMP(), FALSE, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP(), src.BATCH_ID
+        );
+        
+        v_rows_merged := SQLROWCOUNT;
+        RETURN 'RECOVERY_COMPLETE: Stream recreated, ' || v_rows_merged || ' rows merged. Batch: ' || v_batch_id;
+    END IF;
+    
+    -- =========================================================================
+    -- CHECK 2: Stage stream data into temp table (BEST PRACTICE - single read)
+    -- =========================================================================
+    CREATE OR REPLACE TEMPORARY TABLE _CDC_STAGING_LCMTV_EMIS AS
+    SELECT 
+        MARK_CD, EQPUN_NBR, AIR_BRAKE_HOOKP_CD, AIR_BRAKE_MDL_NBR, AIR_CNDTN_IND,
+        ALGN_CNTRL_CPLR_CD, ATCS_CD, AXLE_CT, BRNG_TYPE_CD, CAB_HEATER_CD,
+        CAB_SIGNAL_CD, CLRNC_PLATE_CD, CPLR_A_END_TYPE_CD, CPLR_B_END_TYPE_CD, CSTMS_CD,
+        DYN_BRK_INTLK_IND, DYN_BRK_MAX_EF_QTY, DYN_BRK_TYPE_CD, FUEL_CPCTY_QTY, FUEL_PRHTR_IND,
+        FUEL_SHTF_CD, FUEL_SVR_MNFCTR_CD, FULL_WEIGHT_QTY, GEAR_AXL_TEETH_QTY, GRND_RELAY_RST_CD,
+        HOOD_CNFGRT_CD, HRSPWR_QTY, IND_PRSR_SWTCH_IND, INTRNT_SRVC_CD, JMPR_CBL_CNCTN_CD,
+        LOW_IDLE_IND, MNM_CNTNS_SPD_QTY, MNM_CRV_50_FT_QTY, MNM_CRV_MLTPL_QTY, MNM_CRV_SNGL_QTY,
+        MODEL_NBR, MXM_SPEED_QTY, OPRT_BRAKE_CT, PNLTY_AIR_BRAKE_CD, PNM_CTRL_DELAY_CD,
+        PNM_DYNMC_DLY_CD, PNM_PNLTY_DLY_CD, PNM_UNCTRL_DLY_CD, PNN_GEAR_TEETH_QTY, RADIO_MNFCTR_CD,
+        RADIO_MODEL_NBR, SAFETY_CNTRL_CD, SAND_CPCTY_QTY, SNW_PLW_HGHT_A_CD, SNW_PLW_HGHT_B_CD,
+        SPARK_ARSTR_CD, SPEED_TAPE_CNTL_CD, STNG_CPCTY_CD, STRTR_TYPE_CD, TOILET_TYPE_CD,
+        TRCTN_MTR_CUT_IND, TRCTN_MTR_TYPE_CD, TRUCK_CNTR_LGT_QTY, WATER_COOLER_CD, WATER_DRAIN_IND,
+        WHEEL_SIZE_QTY, RECORD_CREATE_DT, RECORD_UPDATE_TMS, RECORD_UPDATE_TMS_NBR, SPEED_TAPE_CD,
+        TRUCK_MNFCTR_CD, ENGNR_SEAT_TYPE_CD, BLDR_CD, END_TRAIN_INFO_SYSTEM_CD, ETIS_MNTNG_TYPE_CD,
+        CLU_INITIAL_CD, CLU_SERIAL_NBR, IDU_INITIAL_SERIAL_CD, IDU_SERIAL_NBR, LCMTV_TRUCK_TYPE_CD,
+        POWER_AXLE_QTY, LCMTV_FRA_INSPECT_DT, LCMTV_CTC_INSPECT_DT, CREATE_USER_ID, UPDATE_USER_ID,
+        CODED_CAB_SIGNAL_CD, LCMTV_STRTR_TYPE_CD, SNW_OPERATION_TYPE, SNW_LAST_REPLICATED,
+        METADATA$ACTION AS CDC_ACTION,
+        METADATA$ISUPDATE AS CDC_IS_UPDATE,
+        METADATA$ROW_ID AS ROW_ID
+    FROM D_RAW.SADB.LCMTV_EMIS_BASE_HIST_STREAM;
+    
+    SELECT COUNT(*) INTO v_staging_count FROM _CDC_STAGING_LCMTV_EMIS;
+    
+    IF (v_staging_count = 0) THEN
+        DROP TABLE IF EXISTS _CDC_STAGING_LCMTV_EMIS;
+        RETURN 'NO_DATA: Stream has no changes to process at ' || CURRENT_TIMESTAMP()::VARCHAR;
+    END IF;
+    
+    -- =========================================================================
+    -- MAIN PROCESSING: MERGE CDC changes from staging into Data Preservation table
+    -- =========================================================================
+    MERGE INTO D_BRONZE.SADB.LCMTV_EMIS AS tgt
+    USING (
+        SELECT 
+            MARK_CD, EQPUN_NBR, AIR_BRAKE_HOOKP_CD, AIR_BRAKE_MDL_NBR, AIR_CNDTN_IND,
+            ALGN_CNTRL_CPLR_CD, ATCS_CD, AXLE_CT, BRNG_TYPE_CD, CAB_HEATER_CD,
+            CAB_SIGNAL_CD, CLRNC_PLATE_CD, CPLR_A_END_TYPE_CD, CPLR_B_END_TYPE_CD, CSTMS_CD,
+            DYN_BRK_INTLK_IND, DYN_BRK_MAX_EF_QTY, DYN_BRK_TYPE_CD, FUEL_CPCTY_QTY, FUEL_PRHTR_IND,
+            FUEL_SHTF_CD, FUEL_SVR_MNFCTR_CD, FULL_WEIGHT_QTY, GEAR_AXL_TEETH_QTY, GRND_RELAY_RST_CD,
+            HOOD_CNFGRT_CD, HRSPWR_QTY, IND_PRSR_SWTCH_IND, INTRNT_SRVC_CD, JMPR_CBL_CNCTN_CD,
+            LOW_IDLE_IND, MNM_CNTNS_SPD_QTY, MNM_CRV_50_FT_QTY, MNM_CRV_MLTPL_QTY, MNM_CRV_SNGL_QTY,
+            MODEL_NBR, MXM_SPEED_QTY, OPRT_BRAKE_CT, PNLTY_AIR_BRAKE_CD, PNM_CTRL_DELAY_CD,
+            PNM_DYNMC_DLY_CD, PNM_PNLTY_DLY_CD, PNM_UNCTRL_DLY_CD, PNN_GEAR_TEETH_QTY, RADIO_MNFCTR_CD,
+            RADIO_MODEL_NBR, SAFETY_CNTRL_CD, SAND_CPCTY_QTY, SNW_PLW_HGHT_A_CD, SNW_PLW_HGHT_B_CD,
+            SPARK_ARSTR_CD, SPEED_TAPE_CNTL_CD, STNG_CPCTY_CD, STRTR_TYPE_CD, TOILET_TYPE_CD,
+            TRCTN_MTR_CUT_IND, TRCTN_MTR_TYPE_CD, TRUCK_CNTR_LGT_QTY, WATER_COOLER_CD, WATER_DRAIN_IND,
+            WHEEL_SIZE_QTY, RECORD_CREATE_DT, RECORD_UPDATE_TMS, RECORD_UPDATE_TMS_NBR, SPEED_TAPE_CD,
+            TRUCK_MNFCTR_CD, ENGNR_SEAT_TYPE_CD, BLDR_CD, END_TRAIN_INFO_SYSTEM_CD, ETIS_MNTNG_TYPE_CD,
+            CLU_INITIAL_CD, CLU_SERIAL_NBR, IDU_INITIAL_SERIAL_CD, IDU_SERIAL_NBR, LCMTV_TRUCK_TYPE_CD,
+            POWER_AXLE_QTY, LCMTV_FRA_INSPECT_DT, LCMTV_CTC_INSPECT_DT, CREATE_USER_ID, UPDATE_USER_ID,
+            CODED_CAB_SIGNAL_CD, LCMTV_STRTR_TYPE_CD, SNW_OPERATION_TYPE, SNW_LAST_REPLICATED,
+            CDC_ACTION,
+            CDC_IS_UPDATE,
+            ROW_ID,
+            :v_batch_id AS BATCH_ID
+        FROM _CDC_STAGING_LCMTV_EMIS
+    ) AS src
+    ON tgt.MARK_CD = src.MARK_CD
+   AND tgt.EQPUN_NBR = src.EQPUN_NBR
+    
+    -- UPDATE scenario (METADATA$ACTION='INSERT' AND METADATA$ISUPDATE=TRUE)
+    WHEN MATCHED AND src.CDC_ACTION = 'INSERT' AND src.CDC_IS_UPDATE = TRUE THEN 
+        UPDATE SET
+            tgt.AIR_BRAKE_HOOKP_CD = src.AIR_BRAKE_HOOKP_CD,
+            tgt.AIR_BRAKE_MDL_NBR = src.AIR_BRAKE_MDL_NBR,
+            tgt.AIR_CNDTN_IND = src.AIR_CNDTN_IND,
+            tgt.ALGN_CNTRL_CPLR_CD = src.ALGN_CNTRL_CPLR_CD,
+            tgt.ATCS_CD = src.ATCS_CD,
+            tgt.AXLE_CT = src.AXLE_CT,
+            tgt.BRNG_TYPE_CD = src.BRNG_TYPE_CD,
+            tgt.CAB_HEATER_CD = src.CAB_HEATER_CD,
+            tgt.CAB_SIGNAL_CD = src.CAB_SIGNAL_CD,
+            tgt.CLRNC_PLATE_CD = src.CLRNC_PLATE_CD,
+            tgt.CPLR_A_END_TYPE_CD = src.CPLR_A_END_TYPE_CD,
+            tgt.CPLR_B_END_TYPE_CD = src.CPLR_B_END_TYPE_CD,
+            tgt.CSTMS_CD = src.CSTMS_CD,
+            tgt.DYN_BRK_INTLK_IND = src.DYN_BRK_INTLK_IND,
+            tgt.DYN_BRK_MAX_EF_QTY = src.DYN_BRK_MAX_EF_QTY,
+            tgt.DYN_BRK_TYPE_CD = src.DYN_BRK_TYPE_CD,
+            tgt.FUEL_CPCTY_QTY = src.FUEL_CPCTY_QTY,
+            tgt.FUEL_PRHTR_IND = src.FUEL_PRHTR_IND,
+            tgt.FUEL_SHTF_CD = src.FUEL_SHTF_CD,
+            tgt.FUEL_SVR_MNFCTR_CD = src.FUEL_SVR_MNFCTR_CD,
+            tgt.FULL_WEIGHT_QTY = src.FULL_WEIGHT_QTY,
+            tgt.GEAR_AXL_TEETH_QTY = src.GEAR_AXL_TEETH_QTY,
+            tgt.GRND_RELAY_RST_CD = src.GRND_RELAY_RST_CD,
+            tgt.HOOD_CNFGRT_CD = src.HOOD_CNFGRT_CD,
+            tgt.HRSPWR_QTY = src.HRSPWR_QTY,
+            tgt.IND_PRSR_SWTCH_IND = src.IND_PRSR_SWTCH_IND,
+            tgt.INTRNT_SRVC_CD = src.INTRNT_SRVC_CD,
+            tgt.JMPR_CBL_CNCTN_CD = src.JMPR_CBL_CNCTN_CD,
+            tgt.LOW_IDLE_IND = src.LOW_IDLE_IND,
+            tgt.MNM_CNTNS_SPD_QTY = src.MNM_CNTNS_SPD_QTY,
+            tgt.MNM_CRV_50_FT_QTY = src.MNM_CRV_50_FT_QTY,
+            tgt.MNM_CRV_MLTPL_QTY = src.MNM_CRV_MLTPL_QTY,
+            tgt.MNM_CRV_SNGL_QTY = src.MNM_CRV_SNGL_QTY,
+            tgt.MODEL_NBR = src.MODEL_NBR,
+            tgt.MXM_SPEED_QTY = src.MXM_SPEED_QTY,
+            tgt.OPRT_BRAKE_CT = src.OPRT_BRAKE_CT,
+            tgt.PNLTY_AIR_BRAKE_CD = src.PNLTY_AIR_BRAKE_CD,
+            tgt.PNM_CTRL_DELAY_CD = src.PNM_CTRL_DELAY_CD,
+            tgt.PNM_DYNMC_DLY_CD = src.PNM_DYNMC_DLY_CD,
+            tgt.PNM_PNLTY_DLY_CD = src.PNM_PNLTY_DLY_CD,
+            tgt.PNM_UNCTRL_DLY_CD = src.PNM_UNCTRL_DLY_CD,
+            tgt.PNN_GEAR_TEETH_QTY = src.PNN_GEAR_TEETH_QTY,
+            tgt.RADIO_MNFCTR_CD = src.RADIO_MNFCTR_CD,
+            tgt.RADIO_MODEL_NBR = src.RADIO_MODEL_NBR,
+            tgt.SAFETY_CNTRL_CD = src.SAFETY_CNTRL_CD,
+            tgt.SAND_CPCTY_QTY = src.SAND_CPCTY_QTY,
+            tgt.SNW_PLW_HGHT_A_CD = src.SNW_PLW_HGHT_A_CD,
+            tgt.SNW_PLW_HGHT_B_CD = src.SNW_PLW_HGHT_B_CD,
+            tgt.SPARK_ARSTR_CD = src.SPARK_ARSTR_CD,
+            tgt.SPEED_TAPE_CNTL_CD = src.SPEED_TAPE_CNTL_CD,
+            tgt.STNG_CPCTY_CD = src.STNG_CPCTY_CD,
+            tgt.STRTR_TYPE_CD = src.STRTR_TYPE_CD,
+            tgt.TOILET_TYPE_CD = src.TOILET_TYPE_CD,
+            tgt.TRCTN_MTR_CUT_IND = src.TRCTN_MTR_CUT_IND,
+            tgt.TRCTN_MTR_TYPE_CD = src.TRCTN_MTR_TYPE_CD,
+            tgt.TRUCK_CNTR_LGT_QTY = src.TRUCK_CNTR_LGT_QTY,
+            tgt.WATER_COOLER_CD = src.WATER_COOLER_CD,
+            tgt.WATER_DRAIN_IND = src.WATER_DRAIN_IND,
+            tgt.WHEEL_SIZE_QTY = src.WHEEL_SIZE_QTY,
+            tgt.RECORD_CREATE_DT = src.RECORD_CREATE_DT,
+            tgt.RECORD_UPDATE_TMS = src.RECORD_UPDATE_TMS,
+            tgt.RECORD_UPDATE_TMS_NBR = src.RECORD_UPDATE_TMS_NBR,
+            tgt.SPEED_TAPE_CD = src.SPEED_TAPE_CD,
+            tgt.TRUCK_MNFCTR_CD = src.TRUCK_MNFCTR_CD,
+            tgt.ENGNR_SEAT_TYPE_CD = src.ENGNR_SEAT_TYPE_CD,
+            tgt.BLDR_CD = src.BLDR_CD,
+            tgt.END_TRAIN_INFO_SYSTEM_CD = src.END_TRAIN_INFO_SYSTEM_CD,
+            tgt.ETIS_MNTNG_TYPE_CD = src.ETIS_MNTNG_TYPE_CD,
+            tgt.CLU_INITIAL_CD = src.CLU_INITIAL_CD,
+            tgt.CLU_SERIAL_NBR = src.CLU_SERIAL_NBR,
+            tgt.IDU_INITIAL_SERIAL_CD = src.IDU_INITIAL_SERIAL_CD,
+            tgt.IDU_SERIAL_NBR = src.IDU_SERIAL_NBR,
+            tgt.LCMTV_TRUCK_TYPE_CD = src.LCMTV_TRUCK_TYPE_CD,
+            tgt.POWER_AXLE_QTY = src.POWER_AXLE_QTY,
+            tgt.LCMTV_FRA_INSPECT_DT = src.LCMTV_FRA_INSPECT_DT,
+            tgt.LCMTV_CTC_INSPECT_DT = src.LCMTV_CTC_INSPECT_DT,
+            tgt.CREATE_USER_ID = src.CREATE_USER_ID,
+            tgt.UPDATE_USER_ID = src.UPDATE_USER_ID,
+            tgt.CODED_CAB_SIGNAL_CD = src.CODED_CAB_SIGNAL_CD,
+            tgt.LCMTV_STRTR_TYPE_CD = src.LCMTV_STRTR_TYPE_CD,
+            tgt.SNW_OPERATION_TYPE = src.SNW_OPERATION_TYPE,
+            tgt.SNW_LAST_REPLICATED = src.SNW_LAST_REPLICATED,
+            tgt.CDC_OPERATION = 'UPDATE',
+            tgt.CDC_TIMESTAMP = CURRENT_TIMESTAMP(),
+            tgt.IS_DELETED = FALSE,
+            tgt.RECORD_UPDATED_AT = CURRENT_TIMESTAMP(),
+            tgt.SOURCE_LOAD_BATCH_ID = src.BATCH_ID
+    
+    -- DELETE scenario (METADATA$ACTION='DELETE' AND METADATA$ISUPDATE=FALSE)
+    WHEN MATCHED AND src.CDC_ACTION = 'DELETE' AND src.CDC_IS_UPDATE = FALSE THEN 
+        UPDATE SET
+            tgt.CDC_OPERATION = 'DELETE',
+            tgt.CDC_TIMESTAMP = CURRENT_TIMESTAMP(),
+            tgt.IS_DELETED = TRUE,
+            tgt.RECORD_UPDATED_AT = CURRENT_TIMESTAMP(),
+            tgt.SOURCE_LOAD_BATCH_ID = src.BATCH_ID
+    
+    -- RE-INSERT scenario (record exists but being re-inserted)
+    WHEN MATCHED AND src.CDC_ACTION = 'INSERT' AND src.CDC_IS_UPDATE = FALSE THEN
+        UPDATE SET
+            tgt.AIR_BRAKE_HOOKP_CD = src.AIR_BRAKE_HOOKP_CD,
+            tgt.AIR_BRAKE_MDL_NBR = src.AIR_BRAKE_MDL_NBR,
+            tgt.AIR_CNDTN_IND = src.AIR_CNDTN_IND,
+            tgt.ALGN_CNTRL_CPLR_CD = src.ALGN_CNTRL_CPLR_CD,
+            tgt.ATCS_CD = src.ATCS_CD,
+            tgt.AXLE_CT = src.AXLE_CT,
+            tgt.BRNG_TYPE_CD = src.BRNG_TYPE_CD,
+            tgt.CAB_HEATER_CD = src.CAB_HEATER_CD,
+            tgt.CAB_SIGNAL_CD = src.CAB_SIGNAL_CD,
+            tgt.CLRNC_PLATE_CD = src.CLRNC_PLATE_CD,
+            tgt.CPLR_A_END_TYPE_CD = src.CPLR_A_END_TYPE_CD,
+            tgt.CPLR_B_END_TYPE_CD = src.CPLR_B_END_TYPE_CD,
+            tgt.CSTMS_CD = src.CSTMS_CD,
+            tgt.DYN_BRK_INTLK_IND = src.DYN_BRK_INTLK_IND,
+            tgt.DYN_BRK_MAX_EF_QTY = src.DYN_BRK_MAX_EF_QTY,
+            tgt.DYN_BRK_TYPE_CD = src.DYN_BRK_TYPE_CD,
+            tgt.FUEL_CPCTY_QTY = src.FUEL_CPCTY_QTY,
+            tgt.FUEL_PRHTR_IND = src.FUEL_PRHTR_IND,
+            tgt.FUEL_SHTF_CD = src.FUEL_SHTF_CD,
+            tgt.FUEL_SVR_MNFCTR_CD = src.FUEL_SVR_MNFCTR_CD,
+            tgt.FULL_WEIGHT_QTY = src.FULL_WEIGHT_QTY,
+            tgt.GEAR_AXL_TEETH_QTY = src.GEAR_AXL_TEETH_QTY,
+            tgt.GRND_RELAY_RST_CD = src.GRND_RELAY_RST_CD,
+            tgt.HOOD_CNFGRT_CD = src.HOOD_CNFGRT_CD,
+            tgt.HRSPWR_QTY = src.HRSPWR_QTY,
+            tgt.IND_PRSR_SWTCH_IND = src.IND_PRSR_SWTCH_IND,
+            tgt.INTRNT_SRVC_CD = src.INTRNT_SRVC_CD,
+            tgt.JMPR_CBL_CNCTN_CD = src.JMPR_CBL_CNCTN_CD,
+            tgt.LOW_IDLE_IND = src.LOW_IDLE_IND,
+            tgt.MNM_CNTNS_SPD_QTY = src.MNM_CNTNS_SPD_QTY,
+            tgt.MNM_CRV_50_FT_QTY = src.MNM_CRV_50_FT_QTY,
+            tgt.MNM_CRV_MLTPL_QTY = src.MNM_CRV_MLTPL_QTY,
+            tgt.MNM_CRV_SNGL_QTY = src.MNM_CRV_SNGL_QTY,
+            tgt.MODEL_NBR = src.MODEL_NBR,
+            tgt.MXM_SPEED_QTY = src.MXM_SPEED_QTY,
+            tgt.OPRT_BRAKE_CT = src.OPRT_BRAKE_CT,
+            tgt.PNLTY_AIR_BRAKE_CD = src.PNLTY_AIR_BRAKE_CD,
+            tgt.PNM_CTRL_DELAY_CD = src.PNM_CTRL_DELAY_CD,
+            tgt.PNM_DYNMC_DLY_CD = src.PNM_DYNMC_DLY_CD,
+            tgt.PNM_PNLTY_DLY_CD = src.PNM_PNLTY_DLY_CD,
+            tgt.PNM_UNCTRL_DLY_CD = src.PNM_UNCTRL_DLY_CD,
+            tgt.PNN_GEAR_TEETH_QTY = src.PNN_GEAR_TEETH_QTY,
+            tgt.RADIO_MNFCTR_CD = src.RADIO_MNFCTR_CD,
+            tgt.RADIO_MODEL_NBR = src.RADIO_MODEL_NBR,
+            tgt.SAFETY_CNTRL_CD = src.SAFETY_CNTRL_CD,
+            tgt.SAND_CPCTY_QTY = src.SAND_CPCTY_QTY,
+            tgt.SNW_PLW_HGHT_A_CD = src.SNW_PLW_HGHT_A_CD,
+            tgt.SNW_PLW_HGHT_B_CD = src.SNW_PLW_HGHT_B_CD,
+            tgt.SPARK_ARSTR_CD = src.SPARK_ARSTR_CD,
+            tgt.SPEED_TAPE_CNTL_CD = src.SPEED_TAPE_CNTL_CD,
+            tgt.STNG_CPCTY_CD = src.STNG_CPCTY_CD,
+            tgt.STRTR_TYPE_CD = src.STRTR_TYPE_CD,
+            tgt.TOILET_TYPE_CD = src.TOILET_TYPE_CD,
+            tgt.TRCTN_MTR_CUT_IND = src.TRCTN_MTR_CUT_IND,
+            tgt.TRCTN_MTR_TYPE_CD = src.TRCTN_MTR_TYPE_CD,
+            tgt.TRUCK_CNTR_LGT_QTY = src.TRUCK_CNTR_LGT_QTY,
+            tgt.WATER_COOLER_CD = src.WATER_COOLER_CD,
+            tgt.WATER_DRAIN_IND = src.WATER_DRAIN_IND,
+            tgt.WHEEL_SIZE_QTY = src.WHEEL_SIZE_QTY,
+            tgt.RECORD_CREATE_DT = src.RECORD_CREATE_DT,
+            tgt.RECORD_UPDATE_TMS = src.RECORD_UPDATE_TMS,
+            tgt.RECORD_UPDATE_TMS_NBR = src.RECORD_UPDATE_TMS_NBR,
+            tgt.SPEED_TAPE_CD = src.SPEED_TAPE_CD,
+            tgt.TRUCK_MNFCTR_CD = src.TRUCK_MNFCTR_CD,
+            tgt.ENGNR_SEAT_TYPE_CD = src.ENGNR_SEAT_TYPE_CD,
+            tgt.BLDR_CD = src.BLDR_CD,
+            tgt.END_TRAIN_INFO_SYSTEM_CD = src.END_TRAIN_INFO_SYSTEM_CD,
+            tgt.ETIS_MNTNG_TYPE_CD = src.ETIS_MNTNG_TYPE_CD,
+            tgt.CLU_INITIAL_CD = src.CLU_INITIAL_CD,
+            tgt.CLU_SERIAL_NBR = src.CLU_SERIAL_NBR,
+            tgt.IDU_INITIAL_SERIAL_CD = src.IDU_INITIAL_SERIAL_CD,
+            tgt.IDU_SERIAL_NBR = src.IDU_SERIAL_NBR,
+            tgt.LCMTV_TRUCK_TYPE_CD = src.LCMTV_TRUCK_TYPE_CD,
+            tgt.POWER_AXLE_QTY = src.POWER_AXLE_QTY,
+            tgt.LCMTV_FRA_INSPECT_DT = src.LCMTV_FRA_INSPECT_DT,
+            tgt.LCMTV_CTC_INSPECT_DT = src.LCMTV_CTC_INSPECT_DT,
+            tgt.CREATE_USER_ID = src.CREATE_USER_ID,
+            tgt.UPDATE_USER_ID = src.UPDATE_USER_ID,
+            tgt.CODED_CAB_SIGNAL_CD = src.CODED_CAB_SIGNAL_CD,
+            tgt.LCMTV_STRTR_TYPE_CD = src.LCMTV_STRTR_TYPE_CD,
+            tgt.SNW_OPERATION_TYPE = src.SNW_OPERATION_TYPE,
+            tgt.SNW_LAST_REPLICATED = src.SNW_LAST_REPLICATED,
+            tgt.CDC_OPERATION = 'INSERT',
+            tgt.CDC_TIMESTAMP = CURRENT_TIMESTAMP(),
+            tgt.IS_DELETED = FALSE,
+            tgt.RECORD_UPDATED_AT = CURRENT_TIMESTAMP(),
+            tgt.SOURCE_LOAD_BATCH_ID = src.BATCH_ID
+    
+    -- NEW INSERT scenario
+    WHEN NOT MATCHED AND src.CDC_ACTION = 'INSERT' THEN 
+        INSERT (
+            MARK_CD, EQPUN_NBR, AIR_BRAKE_HOOKP_CD, AIR_BRAKE_MDL_NBR, AIR_CNDTN_IND,
+            ALGN_CNTRL_CPLR_CD, ATCS_CD, AXLE_CT, BRNG_TYPE_CD, CAB_HEATER_CD,
+            CAB_SIGNAL_CD, CLRNC_PLATE_CD, CPLR_A_END_TYPE_CD, CPLR_B_END_TYPE_CD, CSTMS_CD,
+            DYN_BRK_INTLK_IND, DYN_BRK_MAX_EF_QTY, DYN_BRK_TYPE_CD, FUEL_CPCTY_QTY, FUEL_PRHTR_IND,
+            FUEL_SHTF_CD, FUEL_SVR_MNFCTR_CD, FULL_WEIGHT_QTY, GEAR_AXL_TEETH_QTY, GRND_RELAY_RST_CD,
+            HOOD_CNFGRT_CD, HRSPWR_QTY, IND_PRSR_SWTCH_IND, INTRNT_SRVC_CD, JMPR_CBL_CNCTN_CD,
+            LOW_IDLE_IND, MNM_CNTNS_SPD_QTY, MNM_CRV_50_FT_QTY, MNM_CRV_MLTPL_QTY, MNM_CRV_SNGL_QTY,
+            MODEL_NBR, MXM_SPEED_QTY, OPRT_BRAKE_CT, PNLTY_AIR_BRAKE_CD, PNM_CTRL_DELAY_CD,
+            PNM_DYNMC_DLY_CD, PNM_PNLTY_DLY_CD, PNM_UNCTRL_DLY_CD, PNN_GEAR_TEETH_QTY, RADIO_MNFCTR_CD,
+            RADIO_MODEL_NBR, SAFETY_CNTRL_CD, SAND_CPCTY_QTY, SNW_PLW_HGHT_A_CD, SNW_PLW_HGHT_B_CD,
+            SPARK_ARSTR_CD, SPEED_TAPE_CNTL_CD, STNG_CPCTY_CD, STRTR_TYPE_CD, TOILET_TYPE_CD,
+            TRCTN_MTR_CUT_IND, TRCTN_MTR_TYPE_CD, TRUCK_CNTR_LGT_QTY, WATER_COOLER_CD, WATER_DRAIN_IND,
+            WHEEL_SIZE_QTY, RECORD_CREATE_DT, RECORD_UPDATE_TMS, RECORD_UPDATE_TMS_NBR, SPEED_TAPE_CD,
+            TRUCK_MNFCTR_CD, ENGNR_SEAT_TYPE_CD, BLDR_CD, END_TRAIN_INFO_SYSTEM_CD, ETIS_MNTNG_TYPE_CD,
+            CLU_INITIAL_CD, CLU_SERIAL_NBR, IDU_INITIAL_SERIAL_CD, IDU_SERIAL_NBR, LCMTV_TRUCK_TYPE_CD,
+            POWER_AXLE_QTY, LCMTV_FRA_INSPECT_DT, LCMTV_CTC_INSPECT_DT, CREATE_USER_ID, UPDATE_USER_ID,
+            CODED_CAB_SIGNAL_CD, LCMTV_STRTR_TYPE_CD, SNW_OPERATION_TYPE, SNW_LAST_REPLICATED,
+            CDC_OPERATION, CDC_TIMESTAMP, IS_DELETED, RECORD_CREATED_AT, RECORD_UPDATED_AT, SOURCE_LOAD_BATCH_ID
+        ) VALUES (
+            src.MARK_CD, src.EQPUN_NBR, src.AIR_BRAKE_HOOKP_CD, src.AIR_BRAKE_MDL_NBR, src.AIR_CNDTN_IND,
+            src.ALGN_CNTRL_CPLR_CD, src.ATCS_CD, src.AXLE_CT, src.BRNG_TYPE_CD, src.CAB_HEATER_CD,
+            src.CAB_SIGNAL_CD, src.CLRNC_PLATE_CD, src.CPLR_A_END_TYPE_CD, src.CPLR_B_END_TYPE_CD, src.CSTMS_CD,
+            src.DYN_BRK_INTLK_IND, src.DYN_BRK_MAX_EF_QTY, src.DYN_BRK_TYPE_CD, src.FUEL_CPCTY_QTY, src.FUEL_PRHTR_IND,
+            src.FUEL_SHTF_CD, src.FUEL_SVR_MNFCTR_CD, src.FULL_WEIGHT_QTY, src.GEAR_AXL_TEETH_QTY, src.GRND_RELAY_RST_CD,
+            src.HOOD_CNFGRT_CD, src.HRSPWR_QTY, src.IND_PRSR_SWTCH_IND, src.INTRNT_SRVC_CD, src.JMPR_CBL_CNCTN_CD,
+            src.LOW_IDLE_IND, src.MNM_CNTNS_SPD_QTY, src.MNM_CRV_50_FT_QTY, src.MNM_CRV_MLTPL_QTY, src.MNM_CRV_SNGL_QTY,
+            src.MODEL_NBR, src.MXM_SPEED_QTY, src.OPRT_BRAKE_CT, src.PNLTY_AIR_BRAKE_CD, src.PNM_CTRL_DELAY_CD,
+            src.PNM_DYNMC_DLY_CD, src.PNM_PNLTY_DLY_CD, src.PNM_UNCTRL_DLY_CD, src.PNN_GEAR_TEETH_QTY, src.RADIO_MNFCTR_CD,
+            src.RADIO_MODEL_NBR, src.SAFETY_CNTRL_CD, src.SAND_CPCTY_QTY, src.SNW_PLW_HGHT_A_CD, src.SNW_PLW_HGHT_B_CD,
+            src.SPARK_ARSTR_CD, src.SPEED_TAPE_CNTL_CD, src.STNG_CPCTY_CD, src.STRTR_TYPE_CD, src.TOILET_TYPE_CD,
+            src.TRCTN_MTR_CUT_IND, src.TRCTN_MTR_TYPE_CD, src.TRUCK_CNTR_LGT_QTY, src.WATER_COOLER_CD, src.WATER_DRAIN_IND,
+            src.WHEEL_SIZE_QTY, src.RECORD_CREATE_DT, src.RECORD_UPDATE_TMS, src.RECORD_UPDATE_TMS_NBR, src.SPEED_TAPE_CD,
+            src.TRUCK_MNFCTR_CD, src.ENGNR_SEAT_TYPE_CD, src.BLDR_CD, src.END_TRAIN_INFO_SYSTEM_CD, src.ETIS_MNTNG_TYPE_CD,
+            src.CLU_INITIAL_CD, src.CLU_SERIAL_NBR, src.IDU_INITIAL_SERIAL_CD, src.IDU_SERIAL_NBR, src.LCMTV_TRUCK_TYPE_CD,
+            src.POWER_AXLE_QTY, src.LCMTV_FRA_INSPECT_DT, src.LCMTV_CTC_INSPECT_DT, src.CREATE_USER_ID, src.UPDATE_USER_ID,
+            src.CODED_CAB_SIGNAL_CD, src.LCMTV_STRTR_TYPE_CD, src.SNW_OPERATION_TYPE, src.SNW_LAST_REPLICATED,
+            'INSERT', CURRENT_TIMESTAMP(), FALSE, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP(), src.BATCH_ID
+        );
+    
+    v_rows_merged := SQLROWCOUNT;
+    DROP TABLE IF EXISTS _CDC_STAGING_LCMTV_EMIS;
+    
+    RETURN 'SUCCESS: Processed ' || v_rows_merged || ' CDC changes. Batch: ' || v_batch_id;
+    
+EXCEPTION
+    WHEN OTHER THEN
+        DROP TABLE IF EXISTS _CDC_STAGING_LCMTV_EMIS;
+        RETURN 'ERROR: ' || SQLERRM || ' at ' || CURRENT_TIMESTAMP()::VARCHAR;
+END;
+$$;
+
+-- =============================================================================
+-- STEP 5: Create Scheduled Task to Process CDC Data
+-- =============================================================================
+CREATE OR REPLACE TASK D_RAW.SADB.TASK_PROCESS_LCMTV_EMIS
+    WAREHOUSE = INFA_INGEST_WH
+    SCHEDULE = '5 MINUTE'
+    ALLOW_OVERLAPPING_EXECUTION = FALSE
+    COMMENT = 'Task to process LCMTV_EMIS_BASE CDC changes into data preservation table'
+WHEN
+    SYSTEM$STREAM_HAS_DATA('D_RAW.SADB.LCMTV_EMIS_BASE_HIST_STREAM')
+AS
+    CALL D_RAW.SADB.SP_PROCESS_LCMTV_EMIS();
+
+ALTER TASK D_RAW.SADB.TASK_PROCESS_LCMTV_EMIS RESUME;
+
+-- =============================================================================
+-- VERIFICATION QUERIES
+-- =============================================================================
+-- SHOW TABLES LIKE 'LCMTV_EMIS%' IN SCHEMA D_BRONZE.SADB;
+-- SHOW STREAMS LIKE 'LCMTV_EMIS%' IN SCHEMA D_RAW.SADB;
+-- SHOW TASKS LIKE 'TASK_PROCESS_LCMTV_EMIS%' IN SCHEMA D_RAW.SADB;
+-- CALL D_RAW.SADB.SP_PROCESS_LCMTV_EMIS();

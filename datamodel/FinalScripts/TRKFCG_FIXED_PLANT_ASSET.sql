@@ -1,0 +1,491 @@
+/*
+================================================================================
+DATA PRESERVATION SCRIPT FOR D_RAW.SADB.TRKFCG_FIXED_PLANT_ASSET_BASE
+================================================================================
+Source Table : D_RAW.SADB.TRKFCG_FIXED_PLANT_ASSET_BASE
+Target Table : D_BRONZE.SADB.TRKFCG_FIXED_PLANT_ASSET
+Stream       : D_RAW.SADB.TRKFCG_FIXED_PLANT_ASSET_BASE_HIST_STREAM
+Procedure    : D_RAW.SADB.SP_PROCESS_TRKFCG_FIXED_PLANT_ASSET()
+Task         : D_RAW.SADB.TASK_PROCESS_TRKFCG_FIXED_PLANT_ASSET
+Primary Key  : GRPHC_OBJECT_VRSN_ID (Single)
+Total Columns: 52 source + 6 CDC metadata = 58
+================================================================================
+*/
+
+-- =============================================================================
+-- STEP 1: Create Target Data Preservation Table
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS D_BRONZE.SADB.TRKFCG_FIXED_PLANT_ASSET (
+    GRPHC_OBJECT_VRSN_ID NUMBER(18,0) NOT NULL,
+    VRSN_CREATE_TMS TIMESTAMP_NTZ(0),
+    VRSN_USER_ID VARCHAR(32),
+    FIRST_GRPHC_OBJECT_VRSN_ID NUMBER(18,0),
+    PRVS_GRPHC_OBJECT_VRSN_ID NUMBER(18,0),
+    GRPHC_OBJECT_MDFCTN_CD VARCHAR(36),
+    GRPHC_OBJECT_STATUS_CD VARCHAR(32),
+    GRPHC_TRNSCT_ID NUMBER(18,0),
+    FIXED_PLANT_ASSET_ID NUMBER(18,0),
+    RECORD_CREATE_TMS TIMESTAMP_NTZ(0),
+    RECORD_UPDATE_TMS TIMESTAMP_NTZ(0),
+    CREATE_USER_ID VARCHAR(32),
+    UPDATE_USER_ID VARCHAR(32),
+    CRNT_DATA_SOURCE_CD VARCHAR(40),
+    ORGNL_DATA_SOURCE_CD VARCHAR(40),
+    ASSET_CD VARCHAR(16),
+    NAME_GNRTN_RULE_ID NUMBER(18,0),
+    ASSET_STATUS_CD VARCHAR(40),
+    ENGLSH_BASE_NM VARCHAR(320),
+    FRENCH_BASE_NM VARCHAR(320),
+    LONG_ENGLSH_NM VARCHAR(320),
+    SHORT_ENGLSH_NM VARCHAR(40),
+    LONG_FRENCH_NM VARCHAR(320),
+    SHORT_FRENCH_NM VARCHAR(40),
+    SAP_USER_ID VARCHAR(32),
+    SCAC_CD VARCHAR(16),
+    FSAC_CD VARCHAR(20),
+    NODE_5_SPELL_NM VARCHAR(20),
+    NODE_8_SPELL_NM VARCHAR(40),
+    ALK_IMPRT_NBR NUMBER(5,0),
+    NODE_IMPRT_NBR NUMBER(5,0),
+    NODE_NBR NUMBER(6,0),
+    CRSNG_ID VARCHAR(40),
+    CRSNG_CD VARCHAR(40),
+    CRSNG_PRTCTN_CD VARCHAR(52),
+    SIGN_ID NUMBER(4,0),
+    SIGN_CD VARCHAR(12),
+    CTC_SIGNAL_ID VARCHAR(24),
+    CTC_AEI_READER_IND VARCHAR(4),
+    CTC_OS_IND VARCHAR(4),
+    SWITCH_CD VARCHAR(40),
+    TRNT_NUMBER_CD VARCHAR(8),
+    TRNT_SPEED_MPH_QTY NUMBER(2,0),
+    RVRSBL_IND VARCHAR(4),
+    NODE_DATA_SOURCE_CD VARCHAR(40),
+    PRMRY_REGION_ID NUMBER(18,0),
+    ALTRNT_LONG_ENGLSH_NM VARCHAR(320),
+    ALTRNT_LONG_FRENCH_NM VARCHAR(320),
+    OCS_LONG_ENGLSH_NM VARCHAR(320),
+    OCS_LONG_FRENCH_NM VARCHAR(320),
+    SNW_OPERATION_TYPE VARCHAR(1),
+    SNW_LAST_REPLICATED TIMESTAMP_NTZ(9),
+
+    CDC_OPERATION VARCHAR(10),  
+    CDC_TIMESTAMP TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    IS_DELETED BOOLEAN DEFAULT FALSE,
+    RECORD_CREATED_AT TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    RECORD_UPDATED_AT TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    SOURCE_LOAD_BATCH_ID VARCHAR(100), 
+
+    PRIMARY KEY (GRPHC_OBJECT_VRSN_ID)
+);
+
+-- =============================================================================
+-- STEP 2: Enable Change Tracking on Source Table
+-- =============================================================================
+ALTER TABLE D_RAW.SADB.TRKFCG_FIXED_PLANT_ASSET_BASE 
+SET CHANGE_TRACKING = TRUE,
+    DATA_RETENTION_TIME_IN_DAYS = 45,
+    MAX_DATA_EXTENSION_TIME_IN_DAYS = 15;
+
+-- =============================================================================
+-- STEP 3: Create Stream with SHOW_INITIAL_ROWS for Initial Load
+-- =============================================================================
+CREATE OR REPLACE STREAM D_RAW.SADB.TRKFCG_FIXED_PLANT_ASSET_BASE_HIST_STREAM
+ON TABLE D_RAW.SADB.TRKFCG_FIXED_PLANT_ASSET_BASE
+SHOW_INITIAL_ROWS = TRUE
+COMMENT = 'CDC Stream for TRKFCG_FIXED_PLANT_ASSET_BASE data preservation. SHOW_INITIAL_ROWS=TRUE for initial load.';
+
+-- =============================================================================
+-- STEP 4: Create Stored Procedure for CDC Processing
+-- =============================================================================
+CREATE OR REPLACE PROCEDURE D_RAW.SADB.SP_PROCESS_TRKFCG_FIXED_PLANT_ASSET()
+RETURNS VARCHAR
+LANGUAGE SQL
+EXECUTE AS CALLER
+AS
+$$
+DECLARE
+    v_batch_id VARCHAR;
+    v_stream_stale BOOLEAN DEFAULT FALSE;
+    v_staging_count NUMBER DEFAULT 0;
+    v_rows_merged NUMBER DEFAULT 0;
+    v_result VARCHAR;
+    v_error_msg VARCHAR;
+BEGIN
+    v_batch_id := 'BATCH_' || TO_VARCHAR(CURRENT_TIMESTAMP(), 'YYYYMMDD_HH24MISS');
+    
+    -- =========================================================================
+    -- CHECK 1: Detect if stream is stale (happens after IDMC truncate/reload)
+    -- =========================================================================
+    BEGIN
+        SELECT COUNT(*) INTO v_staging_count 
+        FROM D_RAW.SADB.TRKFCG_FIXED_PLANT_ASSET_BASE_HIST_STREAM
+        WHERE 1=0;
+        
+        v_stream_stale := FALSE;
+        
+    EXCEPTION
+        WHEN OTHER THEN
+            v_stream_stale := TRUE;
+            v_error_msg := SQLERRM;
+    END;
+    
+    -- =========================================================================
+    -- RECOVERY: If stream is stale, recreate it and do differential load
+    -- =========================================================================
+    IF (v_stream_stale = TRUE) THEN
+        v_result := 'STREAM_STALE_DETECTED: ' || NVL(v_error_msg, 'Unknown') || ' - Initiating recovery at ' || CURRENT_TIMESTAMP()::VARCHAR;
+        
+        CREATE OR REPLACE STREAM D_RAW.SADB.TRKFCG_FIXED_PLANT_ASSET_BASE_HIST_STREAM
+        ON TABLE D_RAW.SADB.TRKFCG_FIXED_PLANT_ASSET_BASE
+        SHOW_INITIAL_ROWS = TRUE
+        COMMENT = 'CDC Stream recreated after staleness detection';
+        
+        MERGE INTO D_BRONZE.SADB.TRKFCG_FIXED_PLANT_ASSET AS tgt
+        USING (
+            SELECT 
+                src.*,
+                'INSERT' AS CDC_OP,
+                :v_batch_id AS BATCH_ID
+            FROM D_RAW.SADB.TRKFCG_FIXED_PLANT_ASSET_BASE src
+            LEFT JOIN D_BRONZE.SADB.TRKFCG_FIXED_PLANT_ASSET tgt 
+                ON src.GRPHC_OBJECT_VRSN_ID = tgt.GRPHC_OBJECT_VRSN_ID
+            WHERE tgt.GRPHC_OBJECT_VRSN_ID IS NULL
+               OR tgt.IS_DELETED = TRUE
+        ) AS src
+        ON tgt.GRPHC_OBJECT_VRSN_ID = src.GRPHC_OBJECT_VRSN_ID
+        WHEN MATCHED THEN UPDATE SET
+            tgt.VRSN_CREATE_TMS = src.VRSN_CREATE_TMS,
+            tgt.VRSN_USER_ID = src.VRSN_USER_ID,
+            tgt.FIRST_GRPHC_OBJECT_VRSN_ID = src.FIRST_GRPHC_OBJECT_VRSN_ID,
+            tgt.PRVS_GRPHC_OBJECT_VRSN_ID = src.PRVS_GRPHC_OBJECT_VRSN_ID,
+            tgt.GRPHC_OBJECT_MDFCTN_CD = src.GRPHC_OBJECT_MDFCTN_CD,
+            tgt.GRPHC_OBJECT_STATUS_CD = src.GRPHC_OBJECT_STATUS_CD,
+            tgt.GRPHC_TRNSCT_ID = src.GRPHC_TRNSCT_ID,
+            tgt.FIXED_PLANT_ASSET_ID = src.FIXED_PLANT_ASSET_ID,
+            tgt.RECORD_CREATE_TMS = src.RECORD_CREATE_TMS,
+            tgt.RECORD_UPDATE_TMS = src.RECORD_UPDATE_TMS,
+            tgt.CREATE_USER_ID = src.CREATE_USER_ID,
+            tgt.UPDATE_USER_ID = src.UPDATE_USER_ID,
+            tgt.CRNT_DATA_SOURCE_CD = src.CRNT_DATA_SOURCE_CD,
+            tgt.ORGNL_DATA_SOURCE_CD = src.ORGNL_DATA_SOURCE_CD,
+            tgt.ASSET_CD = src.ASSET_CD,
+            tgt.NAME_GNRTN_RULE_ID = src.NAME_GNRTN_RULE_ID,
+            tgt.ASSET_STATUS_CD = src.ASSET_STATUS_CD,
+            tgt.ENGLSH_BASE_NM = src.ENGLSH_BASE_NM,
+            tgt.FRENCH_BASE_NM = src.FRENCH_BASE_NM,
+            tgt.LONG_ENGLSH_NM = src.LONG_ENGLSH_NM,
+            tgt.SHORT_ENGLSH_NM = src.SHORT_ENGLSH_NM,
+            tgt.LONG_FRENCH_NM = src.LONG_FRENCH_NM,
+            tgt.SHORT_FRENCH_NM = src.SHORT_FRENCH_NM,
+            tgt.SAP_USER_ID = src.SAP_USER_ID,
+            tgt.SCAC_CD = src.SCAC_CD,
+            tgt.FSAC_CD = src.FSAC_CD,
+            tgt.NODE_5_SPELL_NM = src.NODE_5_SPELL_NM,
+            tgt.NODE_8_SPELL_NM = src.NODE_8_SPELL_NM,
+            tgt.ALK_IMPRT_NBR = src.ALK_IMPRT_NBR,
+            tgt.NODE_IMPRT_NBR = src.NODE_IMPRT_NBR,
+            tgt.NODE_NBR = src.NODE_NBR,
+            tgt.CRSNG_ID = src.CRSNG_ID,
+            tgt.CRSNG_CD = src.CRSNG_CD,
+            tgt.CRSNG_PRTCTN_CD = src.CRSNG_PRTCTN_CD,
+            tgt.SIGN_ID = src.SIGN_ID,
+            tgt.SIGN_CD = src.SIGN_CD,
+            tgt.CTC_SIGNAL_ID = src.CTC_SIGNAL_ID,
+            tgt.CTC_AEI_READER_IND = src.CTC_AEI_READER_IND,
+            tgt.CTC_OS_IND = src.CTC_OS_IND,
+            tgt.SWITCH_CD = src.SWITCH_CD,
+            tgt.TRNT_NUMBER_CD = src.TRNT_NUMBER_CD,
+            tgt.TRNT_SPEED_MPH_QTY = src.TRNT_SPEED_MPH_QTY,
+            tgt.RVRSBL_IND = src.RVRSBL_IND,
+            tgt.NODE_DATA_SOURCE_CD = src.NODE_DATA_SOURCE_CD,
+            tgt.PRMRY_REGION_ID = src.PRMRY_REGION_ID,
+            tgt.ALTRNT_LONG_ENGLSH_NM = src.ALTRNT_LONG_ENGLSH_NM,
+            tgt.ALTRNT_LONG_FRENCH_NM = src.ALTRNT_LONG_FRENCH_NM,
+            tgt.OCS_LONG_ENGLSH_NM = src.OCS_LONG_ENGLSH_NM,
+            tgt.OCS_LONG_FRENCH_NM = src.OCS_LONG_FRENCH_NM,
+            tgt.SNW_OPERATION_TYPE = src.SNW_OPERATION_TYPE,
+            tgt.SNW_LAST_REPLICATED = src.SNW_LAST_REPLICATED,
+            tgt.CDC_OPERATION = 'RELOADED',
+            tgt.CDC_TIMESTAMP = CURRENT_TIMESTAMP(),
+            tgt.IS_DELETED = FALSE,
+            tgt.RECORD_UPDATED_AT = CURRENT_TIMESTAMP(),
+            tgt.SOURCE_LOAD_BATCH_ID = src.BATCH_ID
+        WHEN NOT MATCHED THEN INSERT (
+            GRPHC_OBJECT_VRSN_ID, VRSN_CREATE_TMS, VRSN_USER_ID, FIRST_GRPHC_OBJECT_VRSN_ID, PRVS_GRPHC_OBJECT_VRSN_ID,
+            GRPHC_OBJECT_MDFCTN_CD, GRPHC_OBJECT_STATUS_CD, GRPHC_TRNSCT_ID, FIXED_PLANT_ASSET_ID, RECORD_CREATE_TMS,
+            RECORD_UPDATE_TMS, CREATE_USER_ID, UPDATE_USER_ID, CRNT_DATA_SOURCE_CD, ORGNL_DATA_SOURCE_CD,
+            ASSET_CD, NAME_GNRTN_RULE_ID, ASSET_STATUS_CD, ENGLSH_BASE_NM, FRENCH_BASE_NM,
+            LONG_ENGLSH_NM, SHORT_ENGLSH_NM, LONG_FRENCH_NM, SHORT_FRENCH_NM, SAP_USER_ID,
+            SCAC_CD, FSAC_CD, NODE_5_SPELL_NM, NODE_8_SPELL_NM, ALK_IMPRT_NBR,
+            NODE_IMPRT_NBR, NODE_NBR, CRSNG_ID, CRSNG_CD, CRSNG_PRTCTN_CD,
+            SIGN_ID, SIGN_CD, CTC_SIGNAL_ID, CTC_AEI_READER_IND, CTC_OS_IND,
+            SWITCH_CD, TRNT_NUMBER_CD, TRNT_SPEED_MPH_QTY, RVRSBL_IND, NODE_DATA_SOURCE_CD,
+            PRMRY_REGION_ID, ALTRNT_LONG_ENGLSH_NM, ALTRNT_LONG_FRENCH_NM, OCS_LONG_ENGLSH_NM, OCS_LONG_FRENCH_NM,
+            SNW_OPERATION_TYPE, SNW_LAST_REPLICATED,
+            CDC_OPERATION, CDC_TIMESTAMP, IS_DELETED, RECORD_CREATED_AT, RECORD_UPDATED_AT, SOURCE_LOAD_BATCH_ID
+        ) VALUES (
+            src.GRPHC_OBJECT_VRSN_ID, src.VRSN_CREATE_TMS, src.VRSN_USER_ID, src.FIRST_GRPHC_OBJECT_VRSN_ID, src.PRVS_GRPHC_OBJECT_VRSN_ID,
+            src.GRPHC_OBJECT_MDFCTN_CD, src.GRPHC_OBJECT_STATUS_CD, src.GRPHC_TRNSCT_ID, src.FIXED_PLANT_ASSET_ID, src.RECORD_CREATE_TMS,
+            src.RECORD_UPDATE_TMS, src.CREATE_USER_ID, src.UPDATE_USER_ID, src.CRNT_DATA_SOURCE_CD, src.ORGNL_DATA_SOURCE_CD,
+            src.ASSET_CD, src.NAME_GNRTN_RULE_ID, src.ASSET_STATUS_CD, src.ENGLSH_BASE_NM, src.FRENCH_BASE_NM,
+            src.LONG_ENGLSH_NM, src.SHORT_ENGLSH_NM, src.LONG_FRENCH_NM, src.SHORT_FRENCH_NM, src.SAP_USER_ID,
+            src.SCAC_CD, src.FSAC_CD, src.NODE_5_SPELL_NM, src.NODE_8_SPELL_NM, src.ALK_IMPRT_NBR,
+            src.NODE_IMPRT_NBR, src.NODE_NBR, src.CRSNG_ID, src.CRSNG_CD, src.CRSNG_PRTCTN_CD,
+            src.SIGN_ID, src.SIGN_CD, src.CTC_SIGNAL_ID, src.CTC_AEI_READER_IND, src.CTC_OS_IND,
+            src.SWITCH_CD, src.TRNT_NUMBER_CD, src.TRNT_SPEED_MPH_QTY, src.RVRSBL_IND, src.NODE_DATA_SOURCE_CD,
+            src.PRMRY_REGION_ID, src.ALTRNT_LONG_ENGLSH_NM, src.ALTRNT_LONG_FRENCH_NM, src.OCS_LONG_ENGLSH_NM, src.OCS_LONG_FRENCH_NM,
+            src.SNW_OPERATION_TYPE, src.SNW_LAST_REPLICATED,
+            'INSERT', CURRENT_TIMESTAMP(), FALSE, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP(), src.BATCH_ID
+        );
+        
+        v_rows_merged := SQLROWCOUNT;
+        RETURN 'RECOVERY_COMPLETE: Stream recreated, ' || v_rows_merged || ' rows merged. Batch: ' || v_batch_id;
+    END IF;
+    
+    -- =========================================================================
+    -- CHECK 2: Stage stream data into temp table (BEST PRACTICE - single read)
+    -- =========================================================================
+    CREATE OR REPLACE TEMPORARY TABLE _CDC_STAGING_TRKFCG_FIXED_PLANT_ASSET AS
+    SELECT 
+        GRPHC_OBJECT_VRSN_ID, VRSN_CREATE_TMS, VRSN_USER_ID, FIRST_GRPHC_OBJECT_VRSN_ID, PRVS_GRPHC_OBJECT_VRSN_ID,
+        GRPHC_OBJECT_MDFCTN_CD, GRPHC_OBJECT_STATUS_CD, GRPHC_TRNSCT_ID, FIXED_PLANT_ASSET_ID, RECORD_CREATE_TMS,
+        RECORD_UPDATE_TMS, CREATE_USER_ID, UPDATE_USER_ID, CRNT_DATA_SOURCE_CD, ORGNL_DATA_SOURCE_CD,
+        ASSET_CD, NAME_GNRTN_RULE_ID, ASSET_STATUS_CD, ENGLSH_BASE_NM, FRENCH_BASE_NM,
+        LONG_ENGLSH_NM, SHORT_ENGLSH_NM, LONG_FRENCH_NM, SHORT_FRENCH_NM, SAP_USER_ID,
+        SCAC_CD, FSAC_CD, NODE_5_SPELL_NM, NODE_8_SPELL_NM, ALK_IMPRT_NBR,
+        NODE_IMPRT_NBR, NODE_NBR, CRSNG_ID, CRSNG_CD, CRSNG_PRTCTN_CD,
+        SIGN_ID, SIGN_CD, CTC_SIGNAL_ID, CTC_AEI_READER_IND, CTC_OS_IND,
+        SWITCH_CD, TRNT_NUMBER_CD, TRNT_SPEED_MPH_QTY, RVRSBL_IND, NODE_DATA_SOURCE_CD,
+        PRMRY_REGION_ID, ALTRNT_LONG_ENGLSH_NM, ALTRNT_LONG_FRENCH_NM, OCS_LONG_ENGLSH_NM, OCS_LONG_FRENCH_NM,
+        SNW_OPERATION_TYPE, SNW_LAST_REPLICATED,
+        METADATA$ACTION AS CDC_ACTION,
+        METADATA$ISUPDATE AS CDC_IS_UPDATE,
+        METADATA$ROW_ID AS ROW_ID
+    FROM D_RAW.SADB.TRKFCG_FIXED_PLANT_ASSET_BASE_HIST_STREAM;
+    
+    SELECT COUNT(*) INTO v_staging_count FROM _CDC_STAGING_TRKFCG_FIXED_PLANT_ASSET;
+    
+    IF (v_staging_count = 0) THEN
+        DROP TABLE IF EXISTS _CDC_STAGING_TRKFCG_FIXED_PLANT_ASSET;
+        RETURN 'NO_DATA: Stream has no changes to process at ' || CURRENT_TIMESTAMP()::VARCHAR;
+    END IF;
+    
+    -- =========================================================================
+    -- MAIN PROCESSING: MERGE CDC changes from staging into Data Preservation table
+    -- =========================================================================
+    MERGE INTO D_BRONZE.SADB.TRKFCG_FIXED_PLANT_ASSET AS tgt
+    USING (
+        SELECT 
+            GRPHC_OBJECT_VRSN_ID, VRSN_CREATE_TMS, VRSN_USER_ID, FIRST_GRPHC_OBJECT_VRSN_ID, PRVS_GRPHC_OBJECT_VRSN_ID,
+            GRPHC_OBJECT_MDFCTN_CD, GRPHC_OBJECT_STATUS_CD, GRPHC_TRNSCT_ID, FIXED_PLANT_ASSET_ID, RECORD_CREATE_TMS,
+            RECORD_UPDATE_TMS, CREATE_USER_ID, UPDATE_USER_ID, CRNT_DATA_SOURCE_CD, ORGNL_DATA_SOURCE_CD,
+            ASSET_CD, NAME_GNRTN_RULE_ID, ASSET_STATUS_CD, ENGLSH_BASE_NM, FRENCH_BASE_NM,
+            LONG_ENGLSH_NM, SHORT_ENGLSH_NM, LONG_FRENCH_NM, SHORT_FRENCH_NM, SAP_USER_ID,
+            SCAC_CD, FSAC_CD, NODE_5_SPELL_NM, NODE_8_SPELL_NM, ALK_IMPRT_NBR,
+            NODE_IMPRT_NBR, NODE_NBR, CRSNG_ID, CRSNG_CD, CRSNG_PRTCTN_CD,
+            SIGN_ID, SIGN_CD, CTC_SIGNAL_ID, CTC_AEI_READER_IND, CTC_OS_IND,
+            SWITCH_CD, TRNT_NUMBER_CD, TRNT_SPEED_MPH_QTY, RVRSBL_IND, NODE_DATA_SOURCE_CD,
+            PRMRY_REGION_ID, ALTRNT_LONG_ENGLSH_NM, ALTRNT_LONG_FRENCH_NM, OCS_LONG_ENGLSH_NM, OCS_LONG_FRENCH_NM,
+            SNW_OPERATION_TYPE, SNW_LAST_REPLICATED,
+            CDC_ACTION,
+            CDC_IS_UPDATE,
+            ROW_ID,
+            :v_batch_id AS BATCH_ID
+        FROM _CDC_STAGING_TRKFCG_FIXED_PLANT_ASSET
+    ) AS src
+    ON tgt.GRPHC_OBJECT_VRSN_ID = src.GRPHC_OBJECT_VRSN_ID
+    
+    -- UPDATE scenario (METADATA$ACTION='INSERT' AND METADATA$ISUPDATE=TRUE)
+    WHEN MATCHED AND src.CDC_ACTION = 'INSERT' AND src.CDC_IS_UPDATE = TRUE THEN 
+        UPDATE SET
+            tgt.VRSN_CREATE_TMS = src.VRSN_CREATE_TMS,
+            tgt.VRSN_USER_ID = src.VRSN_USER_ID,
+            tgt.FIRST_GRPHC_OBJECT_VRSN_ID = src.FIRST_GRPHC_OBJECT_VRSN_ID,
+            tgt.PRVS_GRPHC_OBJECT_VRSN_ID = src.PRVS_GRPHC_OBJECT_VRSN_ID,
+            tgt.GRPHC_OBJECT_MDFCTN_CD = src.GRPHC_OBJECT_MDFCTN_CD,
+            tgt.GRPHC_OBJECT_STATUS_CD = src.GRPHC_OBJECT_STATUS_CD,
+            tgt.GRPHC_TRNSCT_ID = src.GRPHC_TRNSCT_ID,
+            tgt.FIXED_PLANT_ASSET_ID = src.FIXED_PLANT_ASSET_ID,
+            tgt.RECORD_CREATE_TMS = src.RECORD_CREATE_TMS,
+            tgt.RECORD_UPDATE_TMS = src.RECORD_UPDATE_TMS,
+            tgt.CREATE_USER_ID = src.CREATE_USER_ID,
+            tgt.UPDATE_USER_ID = src.UPDATE_USER_ID,
+            tgt.CRNT_DATA_SOURCE_CD = src.CRNT_DATA_SOURCE_CD,
+            tgt.ORGNL_DATA_SOURCE_CD = src.ORGNL_DATA_SOURCE_CD,
+            tgt.ASSET_CD = src.ASSET_CD,
+            tgt.NAME_GNRTN_RULE_ID = src.NAME_GNRTN_RULE_ID,
+            tgt.ASSET_STATUS_CD = src.ASSET_STATUS_CD,
+            tgt.ENGLSH_BASE_NM = src.ENGLSH_BASE_NM,
+            tgt.FRENCH_BASE_NM = src.FRENCH_BASE_NM,
+            tgt.LONG_ENGLSH_NM = src.LONG_ENGLSH_NM,
+            tgt.SHORT_ENGLSH_NM = src.SHORT_ENGLSH_NM,
+            tgt.LONG_FRENCH_NM = src.LONG_FRENCH_NM,
+            tgt.SHORT_FRENCH_NM = src.SHORT_FRENCH_NM,
+            tgt.SAP_USER_ID = src.SAP_USER_ID,
+            tgt.SCAC_CD = src.SCAC_CD,
+            tgt.FSAC_CD = src.FSAC_CD,
+            tgt.NODE_5_SPELL_NM = src.NODE_5_SPELL_NM,
+            tgt.NODE_8_SPELL_NM = src.NODE_8_SPELL_NM,
+            tgt.ALK_IMPRT_NBR = src.ALK_IMPRT_NBR,
+            tgt.NODE_IMPRT_NBR = src.NODE_IMPRT_NBR,
+            tgt.NODE_NBR = src.NODE_NBR,
+            tgt.CRSNG_ID = src.CRSNG_ID,
+            tgt.CRSNG_CD = src.CRSNG_CD,
+            tgt.CRSNG_PRTCTN_CD = src.CRSNG_PRTCTN_CD,
+            tgt.SIGN_ID = src.SIGN_ID,
+            tgt.SIGN_CD = src.SIGN_CD,
+            tgt.CTC_SIGNAL_ID = src.CTC_SIGNAL_ID,
+            tgt.CTC_AEI_READER_IND = src.CTC_AEI_READER_IND,
+            tgt.CTC_OS_IND = src.CTC_OS_IND,
+            tgt.SWITCH_CD = src.SWITCH_CD,
+            tgt.TRNT_NUMBER_CD = src.TRNT_NUMBER_CD,
+            tgt.TRNT_SPEED_MPH_QTY = src.TRNT_SPEED_MPH_QTY,
+            tgt.RVRSBL_IND = src.RVRSBL_IND,
+            tgt.NODE_DATA_SOURCE_CD = src.NODE_DATA_SOURCE_CD,
+            tgt.PRMRY_REGION_ID = src.PRMRY_REGION_ID,
+            tgt.ALTRNT_LONG_ENGLSH_NM = src.ALTRNT_LONG_ENGLSH_NM,
+            tgt.ALTRNT_LONG_FRENCH_NM = src.ALTRNT_LONG_FRENCH_NM,
+            tgt.OCS_LONG_ENGLSH_NM = src.OCS_LONG_ENGLSH_NM,
+            tgt.OCS_LONG_FRENCH_NM = src.OCS_LONG_FRENCH_NM,
+            tgt.SNW_OPERATION_TYPE = src.SNW_OPERATION_TYPE,
+            tgt.SNW_LAST_REPLICATED = src.SNW_LAST_REPLICATED,
+            tgt.CDC_OPERATION = 'UPDATE',
+            tgt.CDC_TIMESTAMP = CURRENT_TIMESTAMP(),
+            tgt.IS_DELETED = FALSE,
+            tgt.RECORD_UPDATED_AT = CURRENT_TIMESTAMP(),
+            tgt.SOURCE_LOAD_BATCH_ID = src.BATCH_ID
+    
+    -- DELETE scenario (METADATA$ACTION='DELETE' AND METADATA$ISUPDATE=FALSE)
+    WHEN MATCHED AND src.CDC_ACTION = 'DELETE' AND src.CDC_IS_UPDATE = FALSE THEN 
+        UPDATE SET
+            tgt.CDC_OPERATION = 'DELETE',
+            tgt.CDC_TIMESTAMP = CURRENT_TIMESTAMP(),
+            tgt.IS_DELETED = TRUE,
+            tgt.RECORD_UPDATED_AT = CURRENT_TIMESTAMP(),
+            tgt.SOURCE_LOAD_BATCH_ID = src.BATCH_ID
+    
+    -- RE-INSERT scenario (record exists but being re-inserted)
+    WHEN MATCHED AND src.CDC_ACTION = 'INSERT' AND src.CDC_IS_UPDATE = FALSE THEN
+        UPDATE SET
+            tgt.VRSN_CREATE_TMS = src.VRSN_CREATE_TMS,
+            tgt.VRSN_USER_ID = src.VRSN_USER_ID,
+            tgt.FIRST_GRPHC_OBJECT_VRSN_ID = src.FIRST_GRPHC_OBJECT_VRSN_ID,
+            tgt.PRVS_GRPHC_OBJECT_VRSN_ID = src.PRVS_GRPHC_OBJECT_VRSN_ID,
+            tgt.GRPHC_OBJECT_MDFCTN_CD = src.GRPHC_OBJECT_MDFCTN_CD,
+            tgt.GRPHC_OBJECT_STATUS_CD = src.GRPHC_OBJECT_STATUS_CD,
+            tgt.GRPHC_TRNSCT_ID = src.GRPHC_TRNSCT_ID,
+            tgt.FIXED_PLANT_ASSET_ID = src.FIXED_PLANT_ASSET_ID,
+            tgt.RECORD_CREATE_TMS = src.RECORD_CREATE_TMS,
+            tgt.RECORD_UPDATE_TMS = src.RECORD_UPDATE_TMS,
+            tgt.CREATE_USER_ID = src.CREATE_USER_ID,
+            tgt.UPDATE_USER_ID = src.UPDATE_USER_ID,
+            tgt.CRNT_DATA_SOURCE_CD = src.CRNT_DATA_SOURCE_CD,
+            tgt.ORGNL_DATA_SOURCE_CD = src.ORGNL_DATA_SOURCE_CD,
+            tgt.ASSET_CD = src.ASSET_CD,
+            tgt.NAME_GNRTN_RULE_ID = src.NAME_GNRTN_RULE_ID,
+            tgt.ASSET_STATUS_CD = src.ASSET_STATUS_CD,
+            tgt.ENGLSH_BASE_NM = src.ENGLSH_BASE_NM,
+            tgt.FRENCH_BASE_NM = src.FRENCH_BASE_NM,
+            tgt.LONG_ENGLSH_NM = src.LONG_ENGLSH_NM,
+            tgt.SHORT_ENGLSH_NM = src.SHORT_ENGLSH_NM,
+            tgt.LONG_FRENCH_NM = src.LONG_FRENCH_NM,
+            tgt.SHORT_FRENCH_NM = src.SHORT_FRENCH_NM,
+            tgt.SAP_USER_ID = src.SAP_USER_ID,
+            tgt.SCAC_CD = src.SCAC_CD,
+            tgt.FSAC_CD = src.FSAC_CD,
+            tgt.NODE_5_SPELL_NM = src.NODE_5_SPELL_NM,
+            tgt.NODE_8_SPELL_NM = src.NODE_8_SPELL_NM,
+            tgt.ALK_IMPRT_NBR = src.ALK_IMPRT_NBR,
+            tgt.NODE_IMPRT_NBR = src.NODE_IMPRT_NBR,
+            tgt.NODE_NBR = src.NODE_NBR,
+            tgt.CRSNG_ID = src.CRSNG_ID,
+            tgt.CRSNG_CD = src.CRSNG_CD,
+            tgt.CRSNG_PRTCTN_CD = src.CRSNG_PRTCTN_CD,
+            tgt.SIGN_ID = src.SIGN_ID,
+            tgt.SIGN_CD = src.SIGN_CD,
+            tgt.CTC_SIGNAL_ID = src.CTC_SIGNAL_ID,
+            tgt.CTC_AEI_READER_IND = src.CTC_AEI_READER_IND,
+            tgt.CTC_OS_IND = src.CTC_OS_IND,
+            tgt.SWITCH_CD = src.SWITCH_CD,
+            tgt.TRNT_NUMBER_CD = src.TRNT_NUMBER_CD,
+            tgt.TRNT_SPEED_MPH_QTY = src.TRNT_SPEED_MPH_QTY,
+            tgt.RVRSBL_IND = src.RVRSBL_IND,
+            tgt.NODE_DATA_SOURCE_CD = src.NODE_DATA_SOURCE_CD,
+            tgt.PRMRY_REGION_ID = src.PRMRY_REGION_ID,
+            tgt.ALTRNT_LONG_ENGLSH_NM = src.ALTRNT_LONG_ENGLSH_NM,
+            tgt.ALTRNT_LONG_FRENCH_NM = src.ALTRNT_LONG_FRENCH_NM,
+            tgt.OCS_LONG_ENGLSH_NM = src.OCS_LONG_ENGLSH_NM,
+            tgt.OCS_LONG_FRENCH_NM = src.OCS_LONG_FRENCH_NM,
+            tgt.SNW_OPERATION_TYPE = src.SNW_OPERATION_TYPE,
+            tgt.SNW_LAST_REPLICATED = src.SNW_LAST_REPLICATED,
+            tgt.CDC_OPERATION = 'INSERT',
+            tgt.CDC_TIMESTAMP = CURRENT_TIMESTAMP(),
+            tgt.IS_DELETED = FALSE,
+            tgt.RECORD_UPDATED_AT = CURRENT_TIMESTAMP(),
+            tgt.SOURCE_LOAD_BATCH_ID = src.BATCH_ID
+    
+    -- NEW INSERT scenario
+    WHEN NOT MATCHED AND src.CDC_ACTION = 'INSERT' THEN 
+        INSERT (
+            GRPHC_OBJECT_VRSN_ID, VRSN_CREATE_TMS, VRSN_USER_ID, FIRST_GRPHC_OBJECT_VRSN_ID, PRVS_GRPHC_OBJECT_VRSN_ID,
+            GRPHC_OBJECT_MDFCTN_CD, GRPHC_OBJECT_STATUS_CD, GRPHC_TRNSCT_ID, FIXED_PLANT_ASSET_ID, RECORD_CREATE_TMS,
+            RECORD_UPDATE_TMS, CREATE_USER_ID, UPDATE_USER_ID, CRNT_DATA_SOURCE_CD, ORGNL_DATA_SOURCE_CD,
+            ASSET_CD, NAME_GNRTN_RULE_ID, ASSET_STATUS_CD, ENGLSH_BASE_NM, FRENCH_BASE_NM,
+            LONG_ENGLSH_NM, SHORT_ENGLSH_NM, LONG_FRENCH_NM, SHORT_FRENCH_NM, SAP_USER_ID,
+            SCAC_CD, FSAC_CD, NODE_5_SPELL_NM, NODE_8_SPELL_NM, ALK_IMPRT_NBR,
+            NODE_IMPRT_NBR, NODE_NBR, CRSNG_ID, CRSNG_CD, CRSNG_PRTCTN_CD,
+            SIGN_ID, SIGN_CD, CTC_SIGNAL_ID, CTC_AEI_READER_IND, CTC_OS_IND,
+            SWITCH_CD, TRNT_NUMBER_CD, TRNT_SPEED_MPH_QTY, RVRSBL_IND, NODE_DATA_SOURCE_CD,
+            PRMRY_REGION_ID, ALTRNT_LONG_ENGLSH_NM, ALTRNT_LONG_FRENCH_NM, OCS_LONG_ENGLSH_NM, OCS_LONG_FRENCH_NM,
+            SNW_OPERATION_TYPE, SNW_LAST_REPLICATED,
+            CDC_OPERATION, CDC_TIMESTAMP, IS_DELETED, RECORD_CREATED_AT, RECORD_UPDATED_AT, SOURCE_LOAD_BATCH_ID
+        ) VALUES (
+            src.GRPHC_OBJECT_VRSN_ID, src.VRSN_CREATE_TMS, src.VRSN_USER_ID, src.FIRST_GRPHC_OBJECT_VRSN_ID, src.PRVS_GRPHC_OBJECT_VRSN_ID,
+            src.GRPHC_OBJECT_MDFCTN_CD, src.GRPHC_OBJECT_STATUS_CD, src.GRPHC_TRNSCT_ID, src.FIXED_PLANT_ASSET_ID, src.RECORD_CREATE_TMS,
+            src.RECORD_UPDATE_TMS, src.CREATE_USER_ID, src.UPDATE_USER_ID, src.CRNT_DATA_SOURCE_CD, src.ORGNL_DATA_SOURCE_CD,
+            src.ASSET_CD, src.NAME_GNRTN_RULE_ID, src.ASSET_STATUS_CD, src.ENGLSH_BASE_NM, src.FRENCH_BASE_NM,
+            src.LONG_ENGLSH_NM, src.SHORT_ENGLSH_NM, src.LONG_FRENCH_NM, src.SHORT_FRENCH_NM, src.SAP_USER_ID,
+            src.SCAC_CD, src.FSAC_CD, src.NODE_5_SPELL_NM, src.NODE_8_SPELL_NM, src.ALK_IMPRT_NBR,
+            src.NODE_IMPRT_NBR, src.NODE_NBR, src.CRSNG_ID, src.CRSNG_CD, src.CRSNG_PRTCTN_CD,
+            src.SIGN_ID, src.SIGN_CD, src.CTC_SIGNAL_ID, src.CTC_AEI_READER_IND, src.CTC_OS_IND,
+            src.SWITCH_CD, src.TRNT_NUMBER_CD, src.TRNT_SPEED_MPH_QTY, src.RVRSBL_IND, src.NODE_DATA_SOURCE_CD,
+            src.PRMRY_REGION_ID, src.ALTRNT_LONG_ENGLSH_NM, src.ALTRNT_LONG_FRENCH_NM, src.OCS_LONG_ENGLSH_NM, src.OCS_LONG_FRENCH_NM,
+            src.SNW_OPERATION_TYPE, src.SNW_LAST_REPLICATED,
+            'INSERT', CURRENT_TIMESTAMP(), FALSE, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP(), src.BATCH_ID
+        );
+    
+    v_rows_merged := SQLROWCOUNT;
+    DROP TABLE IF EXISTS _CDC_STAGING_TRKFCG_FIXED_PLANT_ASSET;
+    
+    RETURN 'SUCCESS: Processed ' || v_rows_merged || ' CDC changes. Batch: ' || v_batch_id;
+    
+EXCEPTION
+    WHEN OTHER THEN
+        DROP TABLE IF EXISTS _CDC_STAGING_TRKFCG_FIXED_PLANT_ASSET;
+        RETURN 'ERROR: ' || SQLERRM || ' at ' || CURRENT_TIMESTAMP()::VARCHAR;
+END;
+$$;
+
+-- =============================================================================
+-- STEP 5: Create Scheduled Task to Process CDC Data
+-- =============================================================================
+CREATE OR REPLACE TASK D_RAW.SADB.TASK_PROCESS_TRKFCG_FIXED_PLANT_ASSET
+    WAREHOUSE = INFA_INGEST_WH
+    SCHEDULE = '5 MINUTE'
+    ALLOW_OVERLAPPING_EXECUTION = FALSE
+    COMMENT = 'Task to process TRKFCG_FIXED_PLANT_ASSET_BASE CDC changes into data preservation table'
+WHEN
+    SYSTEM$STREAM_HAS_DATA('D_RAW.SADB.TRKFCG_FIXED_PLANT_ASSET_BASE_HIST_STREAM')
+AS
+    CALL D_RAW.SADB.SP_PROCESS_TRKFCG_FIXED_PLANT_ASSET();
+
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRKFCG_FIXED_PLANT_ASSET RESUME;
+
+-- =============================================================================
+-- VERIFICATION QUERIES
+-- =============================================================================
+-- SHOW TABLES LIKE 'TRKFCG_FIXED_PLANT_ASSET%' IN SCHEMA D_BRONZE.SADB;
+-- SHOW STREAMS LIKE 'TRKFCG_FIXED_PLANT_ASSET%' IN SCHEMA D_RAW.SADB;
+-- SHOW TASKS LIKE 'TASK_PROCESS_TRKFCG_FIXED_PLANT_ASSET%' IN SCHEMA D_RAW.SADB;
+-- CALL D_RAW.SADB.SP_PROCESS_TRKFCG_FIXED_PLANT_ASSET();
