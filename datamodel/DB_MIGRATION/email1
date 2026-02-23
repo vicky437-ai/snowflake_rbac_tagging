@@ -1,0 +1,57 @@
+ Hi David,
+
+  Good morning,
+
+  Following our discussion, I have evaluated two approaches for setting up the D_RAWCDC database with SADB and AWS schemas.
+
+  Note: The DB RENAME option we discussed earlier won't work here since we are only migrating two schemas (SADB & AWS), not the entire D_BRONZE database.
+
+  Option 1: Schema Clone
+
+  ┌───────────────────────┬──────────────────────────────────┐
+  │ Pros                  │ Cons                             │
+  ├───────────────────────┼──────────────────────────────────┤
+  │ Data preserved as-is  │ Grants do NOT transfer           │
+  ├───────────────────────┼──────────────────────────────────┤
+  │ Quick clone operation │ Need to re-grant all permissions │
+  ├───────────────────────┼──────────────────────────────────┤
+  │ Easy rollback         │ Streams need recreation          │
+  └───────────────────────┴──────────────────────────────────┘
+
+  Option 2: Fresh Setup + Reload
+
+  ┌───────────────────────────────┬───────────────────────────┐
+  │ Pros                          │ Cons                      │
+  ├───────────────────────────────┼───────────────────────────┤
+  │ Clean start                   │ Requires data reload      │
+  ├───────────────────────────────┼───────────────────────────┤
+  │ Simple IDMC connection update │ Takes more time initially │
+  ├───────────────────────────────┼───────────────────────────┤
+  │ No grant migration complexity │                           │
+  └───────────────────────────────┴───────────────────────────┘
+
+  Quick Comparison
+
+  ┌────────────┬───────────────┬────────────────────┐
+  │ Criteria   │ Clone         │ Fresh Setup        │
+  ├────────────┼───────────────┼────────────────────┤
+  │ Complexity │ Higher        │ Lower              │
+  ├────────────┼───────────────┼────────────────────┤
+  │ Grants     │ Need re-grant │ Setup from scratch │
+  ├────────────┼───────────────┼────────────────────┤
+  │ Best for   │ Production    │ Development        │
+  └────────────┴───────────────┴────────────────────┘
+
+  My Suggestion: Since we are still in the development stage and will need to reload data anyway after updating the IDMC connection details, I would suggest Option 2 (Fresh Setup). It gives us a clean start without carrying over any legacy
+  configurations.
+
+  Action required:
+
+  • Create D_RAWCDC database with SADB and AWS schemas
+  • Update IDMC connection to target D_RAWCDC
+  • Reload the data
+
+  Please let me know your thoughts.
+
+  Regards,
+  Babu
