@@ -1,0 +1,1062 @@
+# CDC Data Preservation - Production Runbook
+
+```
+================================================================================
+                    PRODUCTION RUNBOOK - CDC DATA PRESERVATION
+                         D_RAW (Source) --> D_BRONZE (Target)
+================================================================================
+Document Version : 1.0
+Last Updated     : 2026-02-23
+Author           : Snowflake Consultant
+Classification   : PRODUCTION - CUSTOMER DEPLOYMENT
+================================================================================
+```
+
+---
+
+## TABLE OF CONTENTS
+
+1. [Executive Summary](#1-executive-summary)
+2. [Architecture Overview](#2-architecture-overview)
+3. [Pre-Deployment Requirements](#3-pre-deployment-requirements)
+4. [Environment Configuration](#4-environment-configuration)
+5. [Deployment Procedure](#5-deployment-procedure)
+6. [Verification Checklist](#6-verification-checklist)
+7. [Monitoring & Operations](#7-monitoring--operations)
+8. [Troubleshooting Guide](#8-troubleshooting-guide)
+9. [Rollback Procedure](#9-rollback-procedure)
+10. [Appendix](#10-appendix)
+
+---
+
+## 1. EXECUTIVE SUMMARY
+
+### 1.1 Project Overview
+
+This runbook provides step-by-step instructions for deploying a CDC (Change Data Capture) data preservation solution that replicates data from **D_RAW** (source) to **D_BRONZE** (target) with full change history tracking and soft delete support.
+
+### 1.2 Scope
+
+| Item | Count |
+|------|-------|
+| Total Tables | 21 |
+| Single Primary Key Tables | 17 |
+| Two-Column Composite Key Tables | 2 |
+| Three-Column Composite Key Tables | 2 |
+| Stored Procedures | 21 |
+| Scheduled Tasks | 21 |
+| CDC Streams | 21 |
+| Monitoring Views | 5 |
+| Audit Tables | 1 |
+
+### 1.3 Key Features
+
+- **Soft Deletes**: Deleted records are marked with `IS_DELETED = TRUE` instead of physical deletion
+- **Full Audit Trail**: All operations logged with batch ID, timestamps, and row counts
+- **Stream Staleness Recovery**: Automatic stream recreation if staleness detected
+- **Transaction Control**: Full ACID compliance with rollback on failure
+- **Parameterized Deployment**: All environment values configurable via session variables
+
+---
+
+## 2. ARCHITECTURE OVERVIEW
+
+### 2.1 Data Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           CDC DATA FLOW ARCHITECTURE                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   D_RAW.SADB                                                                │
+│   ┌──────────────────┐                                                      │
+│   │  *_BASE Tables   │ ──── CHANGE_TRACKING = TRUE                         │
+│   │  (21 tables)     │                                                      │
+│   └────────┬─────────┘                                                      │
+│            │                                                                │
+│            ▼                                                                │
+│   ┌──────────────────┐                                                      │
+│   │  *_HIST_STREAM   │ ──── SHOW_INITIAL_ROWS = TRUE                       │
+│   │  (21 streams)    │      Captures INSERT/UPDATE/DELETE                  │
+│   └────────┬─────────┘                                                      │
+│            │                                                                │
+│            ▼                                                                │
+│   ┌──────────────────┐                                                      │
+│   │  SP_PROCESS_*    │ ──── EXECUTE AS OWNER                               │
+│   │  (21 procedures) │      Transaction Control                            │
+│   │                  │      Audit Logging                                  │
+│   └────────┬─────────┘                                                      │
+│            │                                                                │
+│            ▼                                                                │
+│   ┌──────────────────┐                                                      │
+│   │ TASK_PROCESS_*   │ ──── Schedule: 5 MINUTE                             │
+│   │  (21 tasks)      │      ALLOW_OVERLAPPING = FALSE                      │
+│   └────────┬─────────┘                                                      │
+│            │                                                                │
+│            ▼                                                                │
+│   D_BRONZE.SADB                                                             │
+│   ┌──────────────────┐                                                      │
+│   │  Target Tables   │ ──── CDC Metadata Columns:                          │
+│   │  (21 tables)     │      - CDC_OPERATION                                │
+│   │                  │      - CDC_TIMESTAMP                                │
+│   │                  │      - IS_DELETED                                   │
+│   │                  │      - RECORD_CREATED_AT                            │
+│   │                  │      - RECORD_UPDATED_AT                            │
+│   │                  │      - SOURCE_LOAD_BATCH_ID                         │
+│   └──────────────────┘                                                      │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 2.2 Object Inventory
+
+#### 2.2.1 Complete Table List (21 Tables)
+
+| # | Source Table (D_RAW.SADB) | Target Table (D_BRONZE.SADB) | Primary Key | PK Type |
+|---|---------------------------|------------------------------|-------------|---------|
+| 1 | TRAIN_PLAN_BASE | TRAIN_PLAN | TRAIN_PLAN_ID | Single |
+| 2 | OPTRN_BASE | OPTRN | OPTRN_ID | Single |
+| 3 | OPTRN_LEG_BASE | OPTRN_LEG | OPTRN_LEG_ID | Single |
+| 4 | OPTRN_EVENT_BASE | OPTRN_EVENT | OPTRN_EVENT_ID | Single |
+| 5 | TRKFC_TRSTN_BASE | TRKFC_TRSTN | SCAC_CD, FSAC_CD | Composite (2) |
+| 6 | TRAIN_CNST_SMRY_BASE | TRAIN_CNST_SMRY | CNST_NBR, SCAC_CD, TRAIN_CNST_SMRY_VRSN_NBR | Composite (3) |
+| 7 | STNWYB_MSG_DN_BASE | STNWYB_MSG_DN | STNWYB_MSG_ID | Single |
+| 8 | EQPMNT_AAR_BASE | EQPMNT_AAR_BASE | AAR_CAR_TYPE_CD | Single |
+| 9 | EQPMV_RFEQP_MVMNT_EVENT_BASE | EQPMV_RFEQP_MVMNT_EVENT | EVENT_ID | Single |
+| 10 | CTNAPP_CTNG_LINE_DN_BASE | CTNAPP_CTNG_LINE_DN | CTNG_LINE_ID | Single |
+| 11 | EQPMV_EQPMT_EVENT_TYPE_BASE | EQPMV_EQPMT_EVENT_TYPE | EQPMT_EVENT_TYPE_ID | Single |
+| 12 | TRAIN_PLAN_EVENT_BASE | TRAIN_PLAN_EVENT | TRAIN_PLAN_EVENT_ID | Single |
+| 13 | LCMTV_MVMNT_EVENT_BASE | LCMTV_MVMNT_EVENT | EVENT_ID | Single |
+| 14 | LCMTV_EMIS_BASE | LCMTV_EMIS | MARK_CD, EQPUN_NBR | Composite (2) |
+| 15 | TRAIN_PLAN_LEG_BASE | TRAIN_PLAN_LEG | TRAIN_PLAN_LEG_ID | Single |
+| 16 | TRKFCG_SBDVSN_BASE | TRKFCG_SBDVSN | GRPHC_OBJECT_VRSN_ID | Single |
+| 17 | TRKFCG_FIXED_PLANT_ASSET_BASE | TRKFCG_FIXED_PLANT_ASSET | GRPHC_OBJECT_VRSN_ID | Single |
+| 18 | TRKFCG_FXPLA_TRACK_LCTN_DN_BASE | TRKFCG_FXPLA_TRACK_LCTN_DN | GRPHC_OBJECT_VRSN_ID | Single |
+| 19 | TRAIN_CNST_DTL_RAIL_EQPT_BASE | TRAIN_CNST_DTL_RAIL_EQPT | TRAIN_CNST_SMRY_ID, TRAIN_CNST_SMRY_VRSN_NBR, SQNC_NBR | Composite (3) |
+| 20 | TRKFCG_TRACK_SGMNT_DN_BASE | TRKFCG_TRACK_SGMNT_DN | GRPHC_OBJECT_VRSN_ID | Single |
+| 21 | TRKFCG_SRVC_AREA_BASE | TRKFCG_SRVC_AREA | GRPHC_OBJECT_VRSN_ID | Single |
+
+#### 2.2.2 Stream Names (21 Streams)
+
+| # | Stream Name | Source Table |
+|---|-------------|--------------|
+| 1 | TRAIN_PLAN_BASE_HIST_STREAM | TRAIN_PLAN_BASE |
+| 2 | OPTRN_BASE_HIST_STREAM | OPTRN_BASE |
+| 3 | OPTRN_LEG_BASE_HIST_STREAM | OPTRN_LEG_BASE |
+| 4 | OPTRN_EVENT_BASE_HIST_STREAM | OPTRN_EVENT_BASE |
+| 5 | TRKFC_TRSTN_BASE_HIST_STREAM | TRKFC_TRSTN_BASE |
+| 6 | TRAIN_CNST_SMRY_BASE_HIST_STREAM | TRAIN_CNST_SMRY_BASE |
+| 7 | STNWYB_MSG_DN_BASE_HIST_STREAM | STNWYB_MSG_DN_BASE |
+| 8 | EQPMNT_AAR_BASE_HIST_STREAM | EQPMNT_AAR_BASE |
+| 9 | EQPMV_RFEQP_MVMNT_EVENT_BASE_HIST_STREAM | EQPMV_RFEQP_MVMNT_EVENT_BASE |
+| 10 | CTNAPP_CTNG_LINE_DN_BASE_HIST_STREAM | CTNAPP_CTNG_LINE_DN_BASE |
+| 11 | EQPMV_EQPMT_EVENT_TYPE_BASE_HIST_STREAM | EQPMV_EQPMT_EVENT_TYPE_BASE |
+| 12 | TRAIN_PLAN_EVENT_BASE_HIST_STREAM | TRAIN_PLAN_EVENT_BASE |
+| 13 | LCMTV_MVMNT_EVENT_BASE_HIST_STREAM | LCMTV_MVMNT_EVENT_BASE |
+| 14 | LCMTV_EMIS_BASE_HIST_STREAM | LCMTV_EMIS_BASE |
+| 15 | TRAIN_PLAN_LEG_BASE_HIST_STREAM | TRAIN_PLAN_LEG_BASE |
+| 16 | TRKFCG_SBDVSN_BASE_HIST_STREAM | TRKFCG_SBDVSN_BASE |
+| 17 | TRKFCG_FIXED_PLANT_ASSET_BASE_HIST_STREAM | TRKFCG_FIXED_PLANT_ASSET_BASE |
+| 18 | TRKFCG_FXPLA_TRACK_LCTN_DN_BASE_HIST_STREAM | TRKFCG_FXPLA_TRACK_LCTN_DN_BASE |
+| 19 | TRAIN_CNST_DTL_RAIL_EQPT_BASE_HIST_STREAM | TRAIN_CNST_DTL_RAIL_EQPT_BASE |
+| 20 | TRKFCG_TRACK_SGMNT_DN_BASE_HIST_STREAM | TRKFCG_TRACK_SGMNT_DN_BASE |
+| 21 | TRKFCG_SRVC_AREA_BASE_HIST_STREAM | TRKFCG_SRVC_AREA_BASE |
+
+#### 2.2.3 Procedure Names (21 Procedures)
+
+| # | Procedure Name | Target Table |
+|---|----------------|--------------|
+| 1 | SP_PROCESS_TRAIN_PLAN | TRAIN_PLAN |
+| 2 | SP_PROCESS_OPTRN | OPTRN |
+| 3 | SP_PROCESS_OPTRN_LEG | OPTRN_LEG |
+| 4 | SP_PROCESS_OPTRN_EVENT | OPTRN_EVENT |
+| 5 | SP_PROCESS_TRKFC_TRSTN | TRKFC_TRSTN |
+| 6 | SP_PROCESS_TRAIN_CNST_SMRY | TRAIN_CNST_SMRY |
+| 7 | SP_PROCESS_STNWYB_MSG_DN | STNWYB_MSG_DN |
+| 8 | SP_PROCESS_EQPMNT_AAR_BASE | EQPMNT_AAR_BASE |
+| 9 | SP_PROCESS_EQPMV_RFEQP_MVMNT_EVENT | EQPMV_RFEQP_MVMNT_EVENT |
+| 10 | SP_PROCESS_CTNAPP_CTNG_LINE_DN | CTNAPP_CTNG_LINE_DN |
+| 11 | SP_PROCESS_EQPMV_EQPMT_EVENT_TYPE | EQPMV_EQPMT_EVENT_TYPE |
+| 12 | SP_PROCESS_TRAIN_PLAN_EVENT | TRAIN_PLAN_EVENT |
+| 13 | SP_PROCESS_LCMTV_MVMNT_EVENT | LCMTV_MVMNT_EVENT |
+| 14 | SP_PROCESS_LCMTV_EMIS | LCMTV_EMIS |
+| 15 | SP_PROCESS_TRAIN_PLAN_LEG | TRAIN_PLAN_LEG |
+| 16 | SP_PROCESS_TRKFCG_SBDVSN | TRKFCG_SBDVSN |
+| 17 | SP_PROCESS_TRKFCG_FIXED_PLANT_ASSET | TRKFCG_FIXED_PLANT_ASSET |
+| 18 | SP_PROCESS_TRKFCG_FXPLA_TRACK_LCTN_DN | TRKFCG_FXPLA_TRACK_LCTN_DN |
+| 19 | SP_PROCESS_TRAIN_CNST_DTL_RAIL_EQPT | TRAIN_CNST_DTL_RAIL_EQPT |
+| 20 | SP_PROCESS_TRKFCG_TRACK_SGMNT_DN | TRKFCG_TRACK_SGMNT_DN |
+| 21 | SP_PROCESS_TRKFCG_SRVC_AREA | TRKFCG_SRVC_AREA |
+
+#### 2.2.4 Task Names (21 Tasks)
+
+| # | Task Name | Procedure Called |
+|---|-----------|------------------|
+| 1 | TASK_PROCESS_TRAIN_PLAN | SP_PROCESS_TRAIN_PLAN |
+| 2 | TASK_PROCESS_OPTRN | SP_PROCESS_OPTRN |
+| 3 | TASK_PROCESS_OPTRN_LEG | SP_PROCESS_OPTRN_LEG |
+| 4 | TASK_PROCESS_OPTRN_EVENT | SP_PROCESS_OPTRN_EVENT |
+| 5 | TASK_PROCESS_TRKFC_TRSTN | SP_PROCESS_TRKFC_TRSTN |
+| 6 | TASK_PROCESS_TRAIN_CNST_SMRY | SP_PROCESS_TRAIN_CNST_SMRY |
+| 7 | TASK_PROCESS_STNWYB_MSG_DN | SP_PROCESS_STNWYB_MSG_DN |
+| 8 | TASK_PROCESS_EQPMNT_AAR_BASE | SP_PROCESS_EQPMNT_AAR_BASE |
+| 9 | TASK_PROCESS_EQPMV_RFEQP_MVMNT_EVENT | SP_PROCESS_EQPMV_RFEQP_MVMNT_EVENT |
+| 10 | TASK_PROCESS_CTNAPP_CTNG_LINE_DN | SP_PROCESS_CTNAPP_CTNG_LINE_DN |
+| 11 | TASK_PROCESS_EQPMV_EQPMT_EVENT_TYPE | SP_PROCESS_EQPMV_EQPMT_EVENT_TYPE |
+| 12 | TASK_PROCESS_TRAIN_PLAN_EVENT | SP_PROCESS_TRAIN_PLAN_EVENT |
+| 13 | TASK_PROCESS_LCMTV_MVMNT_EVENT | SP_PROCESS_LCMTV_MVMNT_EVENT |
+| 14 | TASK_PROCESS_LCMTV_EMIS | SP_PROCESS_LCMTV_EMIS |
+| 15 | TASK_PROCESS_TRAIN_PLAN_LEG | SP_PROCESS_TRAIN_PLAN_LEG |
+| 16 | TASK_PROCESS_TRKFCG_SBDVSN | SP_PROCESS_TRKFCG_SBDVSN |
+| 17 | TASK_PROCESS_TRKFCG_FIXED_PLANT_ASSET | SP_PROCESS_TRKFCG_FIXED_PLANT_ASSET |
+| 18 | TASK_PROCESS_TRKFCG_FXPLA_TRACK_LCTN_DN | SP_PROCESS_TRKFCG_FXPLA_TRACK_LCTN_DN |
+| 19 | TASK_PROCESS_TRAIN_CNST_DTL_RAIL_EQPT | SP_PROCESS_TRAIN_CNST_DTL_RAIL_EQPT |
+| 20 | TASK_PROCESS_TRKFCG_TRACK_SGMNT_DN | SP_PROCESS_TRKFCG_TRACK_SGMNT_DN |
+| 21 | TASK_PROCESS_TRKFCG_SRVC_AREA | SP_PROCESS_TRKFCG_SRVC_AREA |
+
+---
+
+## 3. PRE-DEPLOYMENT REQUIREMENTS
+
+### 3.1 Snowflake Account Requirements
+
+| Requirement | Minimum | Recommended |
+|-------------|---------|-------------|
+| Snowflake Edition | Standard | Enterprise |
+| Time Travel Retention | 1 day (Standard) | 45+ days (Enterprise) |
+| Warehouse Size | X-SMALL | SMALL or MEDIUM |
+
+### 3.2 Required Privileges
+
+Execute the following grants before deployment:
+
+```sql
+-- ============================================================================
+-- REQUIRED PRIVILEGES - EXECUTE AS ACCOUNTADMIN OR SECURITYADMIN
+-- ============================================================================
+
+-- Replace these values with your actual role name
+SET DEPLOYER_ROLE = 'CDC_DEPLOYER_ROLE';
+SET SOURCE_DATABASE = 'D_RAW';
+SET SOURCE_SCHEMA = 'SADB';
+SET TARGET_DATABASE = 'D_BRONZE';
+SET TARGET_SCHEMA = 'SADB';
+SET CDC_WAREHOUSE = 'INFA_INGEST_WH';
+
+-- 1. SOURCE DATABASE PRIVILEGES
+GRANT USAGE ON DATABASE IDENTIFIER($SOURCE_DATABASE) TO ROLE IDENTIFIER($DEPLOYER_ROLE);
+GRANT USAGE ON SCHEMA IDENTIFIER($SOURCE_DATABASE || '.' || $SOURCE_SCHEMA) TO ROLE IDENTIFIER($DEPLOYER_ROLE);
+GRANT SELECT ON ALL TABLES IN SCHEMA IDENTIFIER($SOURCE_DATABASE || '.' || $SOURCE_SCHEMA) TO ROLE IDENTIFIER($DEPLOYER_ROLE);
+GRANT CREATE STREAM ON SCHEMA IDENTIFIER($SOURCE_DATABASE || '.' || $SOURCE_SCHEMA) TO ROLE IDENTIFIER($DEPLOYER_ROLE);
+GRANT CREATE PROCEDURE ON SCHEMA IDENTIFIER($SOURCE_DATABASE || '.' || $SOURCE_SCHEMA) TO ROLE IDENTIFIER($DEPLOYER_ROLE);
+GRANT CREATE TASK ON SCHEMA IDENTIFIER($SOURCE_DATABASE || '.' || $SOURCE_SCHEMA) TO ROLE IDENTIFIER($DEPLOYER_ROLE);
+
+-- 2. TARGET DATABASE PRIVILEGES
+GRANT USAGE ON DATABASE IDENTIFIER($TARGET_DATABASE) TO ROLE IDENTIFIER($DEPLOYER_ROLE);
+GRANT USAGE ON SCHEMA IDENTIFIER($TARGET_DATABASE || '.' || $TARGET_SCHEMA) TO ROLE IDENTIFIER($DEPLOYER_ROLE);
+GRANT CREATE TABLE ON SCHEMA IDENTIFIER($TARGET_DATABASE || '.' || $TARGET_SCHEMA) TO ROLE IDENTIFIER($DEPLOYER_ROLE);
+GRANT CREATE VIEW ON SCHEMA IDENTIFIER($TARGET_DATABASE || '.' || $TARGET_SCHEMA) TO ROLE IDENTIFIER($DEPLOYER_ROLE);
+GRANT CREATE PROCEDURE ON SCHEMA IDENTIFIER($TARGET_DATABASE || '.' || $TARGET_SCHEMA) TO ROLE IDENTIFIER($DEPLOYER_ROLE);
+GRANT INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA IDENTIFIER($TARGET_DATABASE || '.' || $TARGET_SCHEMA) TO ROLE IDENTIFIER($DEPLOYER_ROLE);
+GRANT INSERT, UPDATE, DELETE ON FUTURE TABLES IN SCHEMA IDENTIFIER($TARGET_DATABASE || '.' || $TARGET_SCHEMA) TO ROLE IDENTIFIER($DEPLOYER_ROLE);
+
+-- 3. WAREHOUSE PRIVILEGES
+GRANT USAGE ON WAREHOUSE IDENTIFIER($CDC_WAREHOUSE) TO ROLE IDENTIFIER($DEPLOYER_ROLE);
+
+-- 4. TASK EXECUTION PRIVILEGE (ACCOUNT LEVEL)
+GRANT EXECUTE TASK ON ACCOUNT TO ROLE IDENTIFIER($DEPLOYER_ROLE);
+
+-- 5. ALTER TABLE PRIVILEGE FOR CHANGE TRACKING
+GRANT ALTER ON ALL TABLES IN SCHEMA IDENTIFIER($SOURCE_DATABASE || '.' || $SOURCE_SCHEMA) TO ROLE IDENTIFIER($DEPLOYER_ROLE);
+```
+
+### 3.3 Pre-Deployment Verification Queries
+
+Run these queries to verify readiness:
+
+```sql
+-- ============================================================================
+-- PRE-DEPLOYMENT VERIFICATION
+-- ============================================================================
+
+-- 1. Verify source database exists
+SELECT DATABASE_NAME, CREATED, OWNER 
+FROM INFORMATION_SCHEMA.DATABASES 
+WHERE DATABASE_NAME = 'D_RAW';
+
+-- 2. Verify target database exists
+SELECT DATABASE_NAME, CREATED, OWNER 
+FROM INFORMATION_SCHEMA.DATABASES 
+WHERE DATABASE_NAME = 'D_BRONZE';
+
+-- 3. Verify all 21 source tables exist
+SELECT COUNT(*) AS SOURCE_TABLE_COUNT
+FROM D_RAW.INFORMATION_SCHEMA.TABLES
+WHERE TABLE_SCHEMA = 'SADB'
+AND TABLE_NAME IN (
+    'TRAIN_PLAN_BASE', 'OPTRN_BASE', 'OPTRN_LEG_BASE', 'OPTRN_EVENT_BASE',
+    'TRKFC_TRSTN_BASE', 'TRAIN_CNST_SMRY_BASE', 'STNWYB_MSG_DN_BASE',
+    'EQPMNT_AAR_BASE', 'EQPMV_RFEQP_MVMNT_EVENT_BASE', 'CTNAPP_CTNG_LINE_DN_BASE',
+    'EQPMV_EQPMT_EVENT_TYPE_BASE', 'TRAIN_PLAN_EVENT_BASE', 'LCMTV_MVMNT_EVENT_BASE',
+    'LCMTV_EMIS_BASE', 'TRAIN_PLAN_LEG_BASE', 'TRKFCG_SBDVSN_BASE',
+    'TRKFCG_FIXED_PLANT_ASSET_BASE', 'TRKFCG_FXPLA_TRACK_LCTN_DN_BASE',
+    'TRAIN_CNST_DTL_RAIL_EQPT_BASE', 'TRKFCG_TRACK_SGMNT_DN_BASE', 
+    'TRKFCG_SRVC_AREA_BASE'
+);
+-- Expected Result: 21
+
+-- 4. Verify warehouse exists
+SHOW WAREHOUSES LIKE 'INFA_INGEST_WH';
+
+-- 5. Verify current role has required privileges
+SELECT CURRENT_ROLE() AS CURRENT_ROLE;
+SHOW GRANTS TO ROLE IDENTIFIER(CURRENT_ROLE());
+```
+
+---
+
+## 4. ENVIRONMENT CONFIGURATION
+
+### 4.1 Configuration Parameters
+
+Edit `01_SET_PARAMETERS.sql` with the following values:
+
+| Parameter | Default Value | Customer Value | Description |
+|-----------|---------------|----------------|-------------|
+| SOURCE_DATABASE | D_RAW | _____________ | Source database name |
+| SOURCE_SCHEMA | SADB | _____________ | Source schema name |
+| TARGET_DATABASE | D_BRONZE | _____________ | Target database name |
+| TARGET_SCHEMA | SADB | _____________ | Target schema name |
+| CDC_WAREHOUSE | INFA_INGEST_WH | _____________ | Warehouse for tasks |
+| TASK_SCHEDULE | 5 MINUTE | _____________ | Task frequency |
+| DATA_RETENTION_DAYS | 45 | _____________ | Time Travel retention |
+| MAX_EXTENSION_DAYS | 15 | _____________ | Additional retention |
+
+### 4.2 Parameter Configuration SQL
+
+```sql
+-- ============================================================================
+-- MODIFY THESE VALUES FOR YOUR ENVIRONMENT
+-- ============================================================================
+
+-- Source Environment
+SET SOURCE_DATABASE = 'D_RAW';       -- Change if different
+SET SOURCE_SCHEMA = 'SADB';          -- Change if different
+
+-- Target Environment  
+SET TARGET_DATABASE = 'D_BRONZE';    -- Change if different
+SET TARGET_SCHEMA = 'SADB';          -- Change if different
+
+-- Warehouse
+SET CDC_WAREHOUSE = 'INFA_INGEST_WH'; -- Change if different
+
+-- Schedule (Options: '5 MINUTE', '10 MINUTE', '1 HOUR')
+SET TASK_SCHEDULE = '5 MINUTE';
+
+-- Retention (Enterprise Edition supports up to 90 days)
+SET DATA_RETENTION_DAYS = 45;
+SET MAX_EXTENSION_DAYS = 15;
+
+-- Verify configuration
+SELECT 
+    $SOURCE_DATABASE AS SOURCE_DATABASE,
+    $SOURCE_SCHEMA AS SOURCE_SCHEMA,
+    $TARGET_DATABASE AS TARGET_DATABASE,
+    $TARGET_SCHEMA AS TARGET_SCHEMA,
+    $CDC_WAREHOUSE AS CDC_WAREHOUSE,
+    $TASK_SCHEDULE AS TASK_SCHEDULE,
+    $DATA_RETENTION_DAYS AS DATA_RETENTION_DAYS,
+    $MAX_EXTENSION_DAYS AS MAX_EXTENSION_DAYS;
+```
+
+---
+
+## 5. DEPLOYMENT PROCEDURE
+
+### 5.1 Deployment Scripts
+
+Execute scripts in this **EXACT ORDER**:
+
+| Step | Script File | Purpose | Estimated Time |
+|------|------------|---------|----------------|
+| 1 | 01_SET_PARAMETERS.sql | Set environment variables | 1 minute |
+| 2 | 02_CDC_INFRASTRUCTURE.sql | Create audit table & views | 2 minutes |
+| 3 | 03_CREATE_ALL_TARGET_TABLES.sql | Create 21 target tables | 5 minutes |
+| 4 | 04_ENABLE_CHANGE_TRACKING.sql | Enable CDC on source tables | 3 minutes |
+| 5 | 05_CREATE_ALL_STREAMS.sql | Create 21 streams | 3 minutes |
+| 6 | 06_CREATE_ALL_PROCEDURES.sql | Create 21 procedures | 5 minutes |
+| 7 | 07_CREATE_ALL_TASKS.sql | Create 21 tasks (suspended) | 3 minutes |
+| 8 | 08_RESUME_ALL_TASKS.sql | Activate all tasks | 2 minutes |
+
+**Total Estimated Deployment Time: 25 minutes**
+
+### 5.2 Step-by-Step Deployment
+
+#### STEP 1: Set Parameters (01_SET_PARAMETERS.sql)
+
+```sql
+-- Execute in Snowflake worksheet
+-- IMPORTANT: Modify values in the script before executing
+
+-- Run the script
+-- After execution, verify parameters:
+SELECT 
+    $SOURCE_DATABASE AS SOURCE_DATABASE,
+    $SOURCE_SCHEMA AS SOURCE_SCHEMA,
+    $TARGET_DATABASE AS TARGET_DATABASE,
+    $TARGET_SCHEMA AS TARGET_SCHEMA,
+    $CDC_WAREHOUSE AS CDC_WAREHOUSE;
+```
+
+**Expected Output:**
+| SOURCE_DATABASE | SOURCE_SCHEMA | TARGET_DATABASE | TARGET_SCHEMA | CDC_WAREHOUSE |
+|-----------------|---------------|-----------------|---------------|---------------|
+| D_RAW | SADB | D_BRONZE | SADB | INFA_INGEST_WH |
+
+#### STEP 2: Create Infrastructure (02_CDC_INFRASTRUCTURE.sql)
+
+```sql
+-- Execute the infrastructure script
+-- This creates:
+--   1. CDC_PROCESSING_LOG table
+--   2. CDC_STREAM_STATUS view
+--   3. CDC_TASK_STATUS view
+--   4. CDC_DAILY_SUMMARY view
+--   5. CDC_ERROR_LOG view
+--   6. CDC_TABLE_SYNC_STATUS view
+--   7. LOG_CDC_PROCESSING procedure
+
+-- Verify creation:
+SELECT TABLE_NAME, TABLE_TYPE 
+FROM D_BRONZE.INFORMATION_SCHEMA.TABLES 
+WHERE TABLE_SCHEMA = 'SADB' 
+AND TABLE_NAME LIKE 'CDC%';
+```
+
+**Expected Output:**
+| TABLE_NAME | TABLE_TYPE |
+|------------|------------|
+| CDC_PROCESSING_LOG | BASE TABLE |
+| CDC_STREAM_STATUS | VIEW |
+| CDC_TASK_STATUS | VIEW |
+| CDC_DAILY_SUMMARY | VIEW |
+| CDC_ERROR_LOG | VIEW |
+| CDC_TABLE_SYNC_STATUS | VIEW |
+
+#### STEP 3: Create Target Tables (03_CREATE_ALL_TARGET_TABLES.sql)
+
+```sql
+-- Execute the target tables script
+-- This creates all 21 target tables with CDC metadata columns
+
+-- Verify all 21 tables created:
+SELECT COUNT(*) AS TARGET_TABLE_COUNT
+FROM D_BRONZE.INFORMATION_SCHEMA.TABLES
+WHERE TABLE_SCHEMA = 'SADB'
+AND TABLE_TYPE = 'BASE TABLE'
+AND TABLE_NAME NOT LIKE 'CDC%';
+```
+
+**Expected Output:**
+| TARGET_TABLE_COUNT |
+|-------------------|
+| 21 |
+
+#### STEP 4: Enable Change Tracking (04_ENABLE_CHANGE_TRACKING.sql)
+
+```sql
+-- Execute the change tracking script
+-- This enables CHANGE_TRACKING = TRUE on all 21 source tables
+
+-- Verify change tracking enabled:
+SELECT TABLE_NAME, CHANGE_TRACKING
+FROM D_RAW.INFORMATION_SCHEMA.TABLES
+WHERE TABLE_SCHEMA = 'SADB'
+AND TABLE_NAME LIKE '%_BASE'
+AND CHANGE_TRACKING = 'YES';
+```
+
+**Expected Output:** 21 rows with CHANGE_TRACKING = YES
+
+#### STEP 5: Create Streams (05_CREATE_ALL_STREAMS.sql)
+
+```sql
+-- Execute the streams script
+-- This creates 21 CDC streams with SHOW_INITIAL_ROWS = TRUE
+
+-- Verify all 21 streams created:
+SELECT COUNT(*) AS STREAM_COUNT
+FROM TABLE(INFORMATION_SCHEMA.STREAMS())
+WHERE STREAM_NAME LIKE '%_HIST_STREAM';
+```
+
+**Expected Output:**
+| STREAM_COUNT |
+|--------------|
+| 21 |
+
+#### STEP 6: Create Procedures (06_CREATE_ALL_PROCEDURES.sql)
+
+```sql
+-- Execute the procedures script
+-- This creates 21 stored procedures with:
+--   - EXECUTE AS OWNER
+--   - Transaction control
+--   - Audit logging
+--   - Stream staleness recovery
+
+-- Verify all 21 procedures created:
+SHOW PROCEDURES LIKE 'SP_PROCESS_%' IN SCHEMA D_RAW.SADB;
+```
+
+**Expected Output:** 21 procedures listed
+
+#### STEP 7: Create Tasks (07_CREATE_ALL_TASKS.sql)
+
+```sql
+-- Execute the tasks script
+-- This creates 21 tasks in SUSPENDED state
+
+-- Verify all 21 tasks created:
+SELECT COUNT(*) AS TASK_COUNT, STATE
+FROM TABLE(INFORMATION_SCHEMA.TASKS())
+WHERE NAME LIKE 'TASK_PROCESS_%'
+GROUP BY STATE;
+```
+
+**Expected Output:**
+| TASK_COUNT | STATE |
+|------------|-------|
+| 21 | suspended |
+
+#### STEP 8: Resume Tasks (08_RESUME_ALL_TASKS.sql)
+
+```sql
+-- Execute the resume script
+-- WARNING: This activates all CDC processing
+
+-- Verify all 21 tasks are running:
+SELECT COUNT(*) AS ACTIVE_TASKS
+FROM TABLE(INFORMATION_SCHEMA.TASKS())
+WHERE NAME LIKE 'TASK_PROCESS_%'
+AND STATE = 'started';
+```
+
+**Expected Output:**
+| ACTIVE_TASKS |
+|--------------|
+| 21 |
+
+---
+
+## 6. VERIFICATION CHECKLIST
+
+### 6.1 Post-Deployment Verification
+
+Execute each query and verify the expected results:
+
+```sql
+-- ============================================================================
+-- POST-DEPLOYMENT VERIFICATION CHECKLIST
+-- ============================================================================
+
+-- CHECK 1: Verify all 21 target tables exist
+SELECT 'TARGET TABLES' AS CHECK_TYPE, 
+       COUNT(*) AS ACTUAL_COUNT, 
+       21 AS EXPECTED_COUNT,
+       CASE WHEN COUNT(*) = 21 THEN 'PASS' ELSE 'FAIL' END AS STATUS
+FROM D_BRONZE.INFORMATION_SCHEMA.TABLES
+WHERE TABLE_SCHEMA = 'SADB'
+AND TABLE_TYPE = 'BASE TABLE'
+AND TABLE_NAME NOT LIKE 'CDC%';
+
+-- CHECK 2: Verify all 21 streams exist and are not stale
+SELECT 'STREAMS' AS CHECK_TYPE,
+       COUNT(*) AS ACTUAL_COUNT,
+       21 AS EXPECTED_COUNT,
+       CASE WHEN COUNT(*) = 21 THEN 'PASS' ELSE 'FAIL' END AS STATUS
+FROM TABLE(INFORMATION_SCHEMA.STREAMS())
+WHERE STREAM_NAME LIKE '%_HIST_STREAM'
+AND STALE = FALSE;
+
+-- CHECK 3: Verify all 21 procedures exist
+SELECT 'PROCEDURES' AS CHECK_TYPE,
+       COUNT(*) AS ACTUAL_COUNT,
+       21 AS EXPECTED_COUNT,
+       CASE WHEN COUNT(*) = 21 THEN 'PASS' ELSE 'FAIL' END AS STATUS
+FROM D_RAW.INFORMATION_SCHEMA.PROCEDURES
+WHERE PROCEDURE_NAME LIKE 'SP_PROCESS_%';
+
+-- CHECK 4: Verify all 21 tasks are running
+SELECT 'TASKS' AS CHECK_TYPE,
+       COUNT(*) AS ACTUAL_COUNT,
+       21 AS EXPECTED_COUNT,
+       CASE WHEN COUNT(*) = 21 THEN 'PASS' ELSE 'FAIL' END AS STATUS
+FROM TABLE(INFORMATION_SCHEMA.TASKS())
+WHERE NAME LIKE 'TASK_PROCESS_%'
+AND STATE = 'started';
+
+-- CHECK 5: Verify audit table exists
+SELECT 'AUDIT TABLE' AS CHECK_TYPE,
+       COUNT(*) AS ACTUAL_COUNT,
+       1 AS EXPECTED_COUNT,
+       CASE WHEN COUNT(*) = 1 THEN 'PASS' ELSE 'FAIL' END AS STATUS
+FROM D_BRONZE.INFORMATION_SCHEMA.TABLES
+WHERE TABLE_NAME = 'CDC_PROCESSING_LOG';
+
+-- CHECK 6: Verify monitoring views exist (5 views)
+SELECT 'MONITORING VIEWS' AS CHECK_TYPE,
+       COUNT(*) AS ACTUAL_COUNT,
+       5 AS EXPECTED_COUNT,
+       CASE WHEN COUNT(*) = 5 THEN 'PASS' ELSE 'FAIL' END AS STATUS
+FROM D_BRONZE.INFORMATION_SCHEMA.VIEWS
+WHERE TABLE_SCHEMA = 'SADB'
+AND TABLE_NAME LIKE 'CDC_%';
+```
+
+### 6.2 Initial Data Load Verification
+
+After 10-15 minutes, verify initial data has been loaded:
+
+```sql
+-- ============================================================================
+-- INITIAL DATA LOAD VERIFICATION
+-- ============================================================================
+
+-- Check processing log for successful runs
+SELECT 
+    TABLE_NAME,
+    COUNT(*) AS RUN_COUNT,
+    SUM(ROWS_PROCESSED) AS TOTAL_ROWS,
+    MAX(PROCESSING_END) AS LAST_RUN,
+    COUNT(CASE WHEN STATUS = 'SUCCESS' THEN 1 END) AS SUCCESS_COUNT,
+    COUNT(CASE WHEN STATUS = 'ERROR' THEN 1 END) AS ERROR_COUNT
+FROM D_BRONZE.SADB.CDC_PROCESSING_LOG
+GROUP BY TABLE_NAME
+ORDER BY TABLE_NAME;
+
+-- Check row counts in target tables
+SELECT 'TRAIN_PLAN' AS TABLE_NAME, COUNT(*) AS ROW_COUNT FROM D_BRONZE.SADB.TRAIN_PLAN
+UNION ALL SELECT 'OPTRN', COUNT(*) FROM D_BRONZE.SADB.OPTRN
+UNION ALL SELECT 'OPTRN_LEG', COUNT(*) FROM D_BRONZE.SADB.OPTRN_LEG
+UNION ALL SELECT 'OPTRN_EVENT', COUNT(*) FROM D_BRONZE.SADB.OPTRN_EVENT
+UNION ALL SELECT 'TRKFC_TRSTN', COUNT(*) FROM D_BRONZE.SADB.TRKFC_TRSTN
+UNION ALL SELECT 'TRAIN_CNST_SMRY', COUNT(*) FROM D_BRONZE.SADB.TRAIN_CNST_SMRY
+UNION ALL SELECT 'STNWYB_MSG_DN', COUNT(*) FROM D_BRONZE.SADB.STNWYB_MSG_DN
+UNION ALL SELECT 'EQPMNT_AAR_BASE', COUNT(*) FROM D_BRONZE.SADB.EQPMNT_AAR_BASE
+UNION ALL SELECT 'EQPMV_RFEQP_MVMNT_EVENT', COUNT(*) FROM D_BRONZE.SADB.EQPMV_RFEQP_MVMNT_EVENT
+UNION ALL SELECT 'CTNAPP_CTNG_LINE_DN', COUNT(*) FROM D_BRONZE.SADB.CTNAPP_CTNG_LINE_DN
+UNION ALL SELECT 'EQPMV_EQPMT_EVENT_TYPE', COUNT(*) FROM D_BRONZE.SADB.EQPMV_EQPMT_EVENT_TYPE
+UNION ALL SELECT 'TRAIN_PLAN_EVENT', COUNT(*) FROM D_BRONZE.SADB.TRAIN_PLAN_EVENT
+UNION ALL SELECT 'LCMTV_MVMNT_EVENT', COUNT(*) FROM D_BRONZE.SADB.LCMTV_MVMNT_EVENT
+UNION ALL SELECT 'LCMTV_EMIS', COUNT(*) FROM D_BRONZE.SADB.LCMTV_EMIS
+UNION ALL SELECT 'TRAIN_PLAN_LEG', COUNT(*) FROM D_BRONZE.SADB.TRAIN_PLAN_LEG
+UNION ALL SELECT 'TRKFCG_SBDVSN', COUNT(*) FROM D_BRONZE.SADB.TRKFCG_SBDVSN
+UNION ALL SELECT 'TRKFCG_FIXED_PLANT_ASSET', COUNT(*) FROM D_BRONZE.SADB.TRKFCG_FIXED_PLANT_ASSET
+UNION ALL SELECT 'TRKFCG_FXPLA_TRACK_LCTN_DN', COUNT(*) FROM D_BRONZE.SADB.TRKFCG_FXPLA_TRACK_LCTN_DN
+UNION ALL SELECT 'TRAIN_CNST_DTL_RAIL_EQPT', COUNT(*) FROM D_BRONZE.SADB.TRAIN_CNST_DTL_RAIL_EQPT
+UNION ALL SELECT 'TRKFCG_TRACK_SGMNT_DN', COUNT(*) FROM D_BRONZE.SADB.TRKFCG_TRACK_SGMNT_DN
+UNION ALL SELECT 'TRKFCG_SRVC_AREA', COUNT(*) FROM D_BRONZE.SADB.TRKFCG_SRVC_AREA
+ORDER BY TABLE_NAME;
+```
+
+---
+
+## 7. MONITORING & OPERATIONS
+
+### 7.1 Daily Monitoring Queries
+
+```sql
+-- ============================================================================
+-- DAILY MONITORING QUERIES
+-- ============================================================================
+
+-- 1. Check overall system health
+SELECT * FROM D_BRONZE.SADB.CDC_TABLE_SYNC_STATUS;
+
+-- 2. Check stream health (watch for STALE streams)
+SELECT * FROM D_BRONZE.SADB.CDC_STREAM_STATUS;
+
+-- 3. Check task status
+SELECT * FROM D_BRONZE.SADB.CDC_TASK_STATUS;
+
+-- 4. Check for errors in last 24 hours
+SELECT * FROM D_BRONZE.SADB.CDC_ERROR_LOG
+WHERE PROCESSING_START >= DATEADD('hour', -24, CURRENT_TIMESTAMP());
+
+-- 5. Daily processing summary
+SELECT * FROM D_BRONZE.SADB.CDC_DAILY_SUMMARY
+WHERE PROCESSING_DATE = CURRENT_DATE();
+```
+
+### 7.2 Task Execution History
+
+```sql
+-- Check task execution history
+SELECT 
+    NAME AS TASK_NAME,
+    STATE,
+    SCHEDULED_TIME,
+    COMPLETED_TIME,
+    RETURN_VALUE,
+    ERROR_MESSAGE
+FROM TABLE(INFORMATION_SCHEMA.TASK_HISTORY(
+    SCHEDULED_TIME_RANGE_START => DATEADD('hour', -24, CURRENT_TIMESTAMP()),
+    RESULT_LIMIT => 100
+))
+WHERE NAME LIKE 'TASK_PROCESS_%'
+ORDER BY SCHEDULED_TIME DESC;
+```
+
+### 7.3 Manual Task Execution
+
+```sql
+-- To manually execute a specific task:
+EXECUTE TASK D_RAW.SADB.TASK_PROCESS_TRAIN_PLAN;
+
+-- To manually execute a specific procedure:
+CALL D_RAW.SADB.SP_PROCESS_TRAIN_PLAN();
+```
+
+### 7.4 Suspend/Resume Tasks
+
+```sql
+-- ============================================================================
+-- SUSPEND ALL TASKS (Emergency Stop)
+-- ============================================================================
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRAIN_PLAN SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_OPTRN SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_OPTRN_LEG SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_OPTRN_EVENT SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRKFC_TRSTN SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRAIN_CNST_SMRY SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_STNWYB_MSG_DN SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_EQPMNT_AAR_BASE SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_EQPMV_RFEQP_MVMNT_EVENT SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_CTNAPP_CTNG_LINE_DN SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_EQPMV_EQPMT_EVENT_TYPE SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRAIN_PLAN_EVENT SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_LCMTV_MVMNT_EVENT SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_LCMTV_EMIS SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRAIN_PLAN_LEG SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRKFCG_SBDVSN SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRKFCG_FIXED_PLANT_ASSET SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRKFCG_FXPLA_TRACK_LCTN_DN SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRAIN_CNST_DTL_RAIL_EQPT SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRKFCG_TRACK_SGMNT_DN SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRKFCG_SRVC_AREA SUSPEND;
+
+-- ============================================================================
+-- RESUME ALL TASKS
+-- ============================================================================
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRAIN_PLAN RESUME;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_OPTRN RESUME;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_OPTRN_LEG RESUME;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_OPTRN_EVENT RESUME;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRKFC_TRSTN RESUME;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRAIN_CNST_SMRY RESUME;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_STNWYB_MSG_DN RESUME;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_EQPMNT_AAR_BASE RESUME;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_EQPMV_RFEQP_MVMNT_EVENT RESUME;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_CTNAPP_CTNG_LINE_DN RESUME;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_EQPMV_EQPMT_EVENT_TYPE RESUME;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRAIN_PLAN_EVENT RESUME;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_LCMTV_MVMNT_EVENT RESUME;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_LCMTV_EMIS RESUME;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRAIN_PLAN_LEG RESUME;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRKFCG_SBDVSN RESUME;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRKFCG_FIXED_PLANT_ASSET RESUME;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRKFCG_FXPLA_TRACK_LCTN_DN RESUME;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRAIN_CNST_DTL_RAIL_EQPT RESUME;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRKFCG_TRACK_SGMNT_DN RESUME;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRKFCG_SRVC_AREA RESUME;
+```
+
+---
+
+## 8. TROUBLESHOOTING GUIDE
+
+### 8.1 Common Issues and Resolutions
+
+#### Issue 1: Stream is Stale
+
+**Symptoms:**
+- Error message contains "stale"
+- CDC_STREAM_STATUS shows IS_STALE = TRUE
+
+**Resolution:**
+```sql
+-- The procedure auto-recovers, but if needed manually:
+CREATE OR REPLACE STREAM D_RAW.SADB.TRAIN_PLAN_BASE_HIST_STREAM 
+ON TABLE D_RAW.SADB.TRAIN_PLAN_BASE
+SHOW_INITIAL_ROWS = TRUE;
+
+-- Then resume the task
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRAIN_PLAN RESUME;
+```
+
+#### Issue 2: Task Not Running
+
+**Symptoms:**
+- Task state = 'suspended'
+- No data being processed
+
+**Resolution:**
+```sql
+-- Check task state
+SHOW TASKS LIKE 'TASK_PROCESS_TRAIN_PLAN' IN SCHEMA D_RAW.SADB;
+
+-- Resume task
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRAIN_PLAN RESUME;
+
+-- Verify privileges
+SHOW GRANTS TO ROLE IDENTIFIER(CURRENT_ROLE());
+```
+
+#### Issue 3: Privilege Error
+
+**Symptoms:**
+- Error: "Insufficient privileges"
+- Task fails with permission denied
+
+**Resolution:**
+```sql
+-- Grant required privileges
+GRANT EXECUTE TASK ON ACCOUNT TO ROLE <YOUR_ROLE>;
+GRANT INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA D_BRONZE.SADB TO ROLE <YOUR_ROLE>;
+```
+
+#### Issue 4: Performance Issues
+
+**Symptoms:**
+- Tasks taking longer than expected
+- Warehouse queue time increasing
+
+**Resolution:**
+```sql
+-- Increase warehouse size
+ALTER WAREHOUSE INFA_INGEST_WH SET WAREHOUSE_SIZE = 'MEDIUM';
+
+-- Or adjust task schedule
+-- Edit task schedule to run less frequently
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRAIN_PLAN 
+SET SCHEDULE = '10 MINUTE';
+```
+
+#### Issue 5: Data Mismatch
+
+**Symptoms:**
+- Row counts don't match between source and target
+- Missing records in target
+
+**Resolution:**
+```sql
+-- Compare counts
+SELECT 
+    (SELECT COUNT(*) FROM D_RAW.SADB.TRAIN_PLAN_BASE) AS SOURCE_COUNT,
+    (SELECT COUNT(*) FROM D_BRONZE.SADB.TRAIN_PLAN) AS TARGET_TOTAL,
+    (SELECT COUNT(*) FROM D_BRONZE.SADB.TRAIN_PLAN WHERE IS_DELETED = FALSE) AS TARGET_ACTIVE;
+
+-- Check for errors in processing log
+SELECT * FROM D_BRONZE.SADB.CDC_ERROR_LOG 
+WHERE TABLE_NAME = 'TRAIN_PLAN'
+ORDER BY PROCESSING_START DESC;
+```
+
+---
+
+## 9. ROLLBACK PROCEDURE
+
+### 9.1 Complete Rollback
+
+Execute in this order to completely remove the CDC solution:
+
+```sql
+-- ============================================================================
+-- COMPLETE ROLLBACK PROCEDURE
+-- Execute each section in order
+-- ============================================================================
+
+-- STEP 1: Suspend all tasks first
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRAIN_PLAN SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_OPTRN SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_OPTRN_LEG SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_OPTRN_EVENT SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRKFC_TRSTN SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRAIN_CNST_SMRY SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_STNWYB_MSG_DN SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_EQPMNT_AAR_BASE SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_EQPMV_RFEQP_MVMNT_EVENT SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_CTNAPP_CTNG_LINE_DN SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_EQPMV_EQPMT_EVENT_TYPE SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRAIN_PLAN_EVENT SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_LCMTV_MVMNT_EVENT SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_LCMTV_EMIS SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRAIN_PLAN_LEG SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRKFCG_SBDVSN SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRKFCG_FIXED_PLANT_ASSET SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRKFCG_FXPLA_TRACK_LCTN_DN SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRAIN_CNST_DTL_RAIL_EQPT SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRKFCG_TRACK_SGMNT_DN SUSPEND;
+ALTER TASK D_RAW.SADB.TASK_PROCESS_TRKFCG_SRVC_AREA SUSPEND;
+
+-- STEP 2: Drop all tasks
+DROP TASK IF EXISTS D_RAW.SADB.TASK_PROCESS_TRAIN_PLAN;
+DROP TASK IF EXISTS D_RAW.SADB.TASK_PROCESS_OPTRN;
+DROP TASK IF EXISTS D_RAW.SADB.TASK_PROCESS_OPTRN_LEG;
+DROP TASK IF EXISTS D_RAW.SADB.TASK_PROCESS_OPTRN_EVENT;
+DROP TASK IF EXISTS D_RAW.SADB.TASK_PROCESS_TRKFC_TRSTN;
+DROP TASK IF EXISTS D_RAW.SADB.TASK_PROCESS_TRAIN_CNST_SMRY;
+DROP TASK IF EXISTS D_RAW.SADB.TASK_PROCESS_STNWYB_MSG_DN;
+DROP TASK IF EXISTS D_RAW.SADB.TASK_PROCESS_EQPMNT_AAR_BASE;
+DROP TASK IF EXISTS D_RAW.SADB.TASK_PROCESS_EQPMV_RFEQP_MVMNT_EVENT;
+DROP TASK IF EXISTS D_RAW.SADB.TASK_PROCESS_CTNAPP_CTNG_LINE_DN;
+DROP TASK IF EXISTS D_RAW.SADB.TASK_PROCESS_EQPMV_EQPMT_EVENT_TYPE;
+DROP TASK IF EXISTS D_RAW.SADB.TASK_PROCESS_TRAIN_PLAN_EVENT;
+DROP TASK IF EXISTS D_RAW.SADB.TASK_PROCESS_LCMTV_MVMNT_EVENT;
+DROP TASK IF EXISTS D_RAW.SADB.TASK_PROCESS_LCMTV_EMIS;
+DROP TASK IF EXISTS D_RAW.SADB.TASK_PROCESS_TRAIN_PLAN_LEG;
+DROP TASK IF EXISTS D_RAW.SADB.TASK_PROCESS_TRKFCG_SBDVSN;
+DROP TASK IF EXISTS D_RAW.SADB.TASK_PROCESS_TRKFCG_FIXED_PLANT_ASSET;
+DROP TASK IF EXISTS D_RAW.SADB.TASK_PROCESS_TRKFCG_FXPLA_TRACK_LCTN_DN;
+DROP TASK IF EXISTS D_RAW.SADB.TASK_PROCESS_TRAIN_CNST_DTL_RAIL_EQPT;
+DROP TASK IF EXISTS D_RAW.SADB.TASK_PROCESS_TRKFCG_TRACK_SGMNT_DN;
+DROP TASK IF EXISTS D_RAW.SADB.TASK_PROCESS_TRKFCG_SRVC_AREA;
+
+-- STEP 3: Drop all procedures
+DROP PROCEDURE IF EXISTS D_RAW.SADB.SP_PROCESS_TRAIN_PLAN();
+DROP PROCEDURE IF EXISTS D_RAW.SADB.SP_PROCESS_OPTRN();
+DROP PROCEDURE IF EXISTS D_RAW.SADB.SP_PROCESS_OPTRN_LEG();
+DROP PROCEDURE IF EXISTS D_RAW.SADB.SP_PROCESS_OPTRN_EVENT();
+DROP PROCEDURE IF EXISTS D_RAW.SADB.SP_PROCESS_TRKFC_TRSTN();
+DROP PROCEDURE IF EXISTS D_RAW.SADB.SP_PROCESS_TRAIN_CNST_SMRY();
+DROP PROCEDURE IF EXISTS D_RAW.SADB.SP_PROCESS_STNWYB_MSG_DN();
+DROP PROCEDURE IF EXISTS D_RAW.SADB.SP_PROCESS_EQPMNT_AAR_BASE();
+DROP PROCEDURE IF EXISTS D_RAW.SADB.SP_PROCESS_EQPMV_RFEQP_MVMNT_EVENT();
+DROP PROCEDURE IF EXISTS D_RAW.SADB.SP_PROCESS_CTNAPP_CTNG_LINE_DN();
+DROP PROCEDURE IF EXISTS D_RAW.SADB.SP_PROCESS_EQPMV_EQPMT_EVENT_TYPE();
+DROP PROCEDURE IF EXISTS D_RAW.SADB.SP_PROCESS_TRAIN_PLAN_EVENT();
+DROP PROCEDURE IF EXISTS D_RAW.SADB.SP_PROCESS_LCMTV_MVMNT_EVENT();
+DROP PROCEDURE IF EXISTS D_RAW.SADB.SP_PROCESS_LCMTV_EMIS();
+DROP PROCEDURE IF EXISTS D_RAW.SADB.SP_PROCESS_TRAIN_PLAN_LEG();
+DROP PROCEDURE IF EXISTS D_RAW.SADB.SP_PROCESS_TRKFCG_SBDVSN();
+DROP PROCEDURE IF EXISTS D_RAW.SADB.SP_PROCESS_TRKFCG_FIXED_PLANT_ASSET();
+DROP PROCEDURE IF EXISTS D_RAW.SADB.SP_PROCESS_TRKFCG_FXPLA_TRACK_LCTN_DN();
+DROP PROCEDURE IF EXISTS D_RAW.SADB.SP_PROCESS_TRAIN_CNST_DTL_RAIL_EQPT();
+DROP PROCEDURE IF EXISTS D_RAW.SADB.SP_PROCESS_TRKFCG_TRACK_SGMNT_DN();
+DROP PROCEDURE IF EXISTS D_RAW.SADB.SP_PROCESS_TRKFCG_SRVC_AREA();
+
+-- STEP 4: Drop all streams
+DROP STREAM IF EXISTS D_RAW.SADB.TRAIN_PLAN_BASE_HIST_STREAM;
+DROP STREAM IF EXISTS D_RAW.SADB.OPTRN_BASE_HIST_STREAM;
+DROP STREAM IF EXISTS D_RAW.SADB.OPTRN_LEG_BASE_HIST_STREAM;
+DROP STREAM IF EXISTS D_RAW.SADB.OPTRN_EVENT_BASE_HIST_STREAM;
+DROP STREAM IF EXISTS D_RAW.SADB.TRKFC_TRSTN_BASE_HIST_STREAM;
+DROP STREAM IF EXISTS D_RAW.SADB.TRAIN_CNST_SMRY_BASE_HIST_STREAM;
+DROP STREAM IF EXISTS D_RAW.SADB.STNWYB_MSG_DN_BASE_HIST_STREAM;
+DROP STREAM IF EXISTS D_RAW.SADB.EQPMNT_AAR_BASE_HIST_STREAM;
+DROP STREAM IF EXISTS D_RAW.SADB.EQPMV_RFEQP_MVMNT_EVENT_BASE_HIST_STREAM;
+DROP STREAM IF EXISTS D_RAW.SADB.CTNAPP_CTNG_LINE_DN_BASE_HIST_STREAM;
+DROP STREAM IF EXISTS D_RAW.SADB.EQPMV_EQPMT_EVENT_TYPE_BASE_HIST_STREAM;
+DROP STREAM IF EXISTS D_RAW.SADB.TRAIN_PLAN_EVENT_BASE_HIST_STREAM;
+DROP STREAM IF EXISTS D_RAW.SADB.LCMTV_MVMNT_EVENT_BASE_HIST_STREAM;
+DROP STREAM IF EXISTS D_RAW.SADB.LCMTV_EMIS_BASE_HIST_STREAM;
+DROP STREAM IF EXISTS D_RAW.SADB.TRAIN_PLAN_LEG_BASE_HIST_STREAM;
+DROP STREAM IF EXISTS D_RAW.SADB.TRKFCG_SBDVSN_BASE_HIST_STREAM;
+DROP STREAM IF EXISTS D_RAW.SADB.TRKFCG_FIXED_PLANT_ASSET_BASE_HIST_STREAM;
+DROP STREAM IF EXISTS D_RAW.SADB.TRKFCG_FXPLA_TRACK_LCTN_DN_BASE_HIST_STREAM;
+DROP STREAM IF EXISTS D_RAW.SADB.TRAIN_CNST_DTL_RAIL_EQPT_BASE_HIST_STREAM;
+DROP STREAM IF EXISTS D_RAW.SADB.TRKFCG_TRACK_SGMNT_DN_BASE_HIST_STREAM;
+DROP STREAM IF EXISTS D_RAW.SADB.TRKFCG_SRVC_AREA_BASE_HIST_STREAM;
+
+-- STEP 5: (OPTIONAL) Drop target tables and infrastructure
+-- WARNING: This will delete all replicated data!
+-- Only execute if you want to completely remove the solution
+
+-- Drop monitoring views
+DROP VIEW IF EXISTS D_BRONZE.SADB.CDC_STREAM_STATUS;
+DROP VIEW IF EXISTS D_BRONZE.SADB.CDC_TASK_STATUS;
+DROP VIEW IF EXISTS D_BRONZE.SADB.CDC_DAILY_SUMMARY;
+DROP VIEW IF EXISTS D_BRONZE.SADB.CDC_ERROR_LOG;
+DROP VIEW IF EXISTS D_BRONZE.SADB.CDC_TABLE_SYNC_STATUS;
+
+-- Drop audit table
+DROP TABLE IF EXISTS D_BRONZE.SADB.CDC_PROCESSING_LOG;
+
+-- Drop logging procedure
+DROP PROCEDURE IF EXISTS D_BRONZE.SADB.LOG_CDC_PROCESSING(VARCHAR, VARCHAR, NUMBER, NUMBER, NUMBER, NUMBER, TIMESTAMP_NTZ, VARCHAR, VARCHAR, VARCHAR);
+```
+
+---
+
+## 10. APPENDIX
+
+### 10.1 CDC Metadata Columns Reference
+
+Each target table includes these 6 CDC metadata columns:
+
+| Column Name | Data Type | Description |
+|-------------|-----------|-------------|
+| CDC_OPERATION | VARCHAR(10) | INSERT, UPDATE, or DELETE |
+| CDC_TIMESTAMP | TIMESTAMP_NTZ | When the CDC operation was recorded |
+| IS_DELETED | BOOLEAN | TRUE = soft deleted, FALSE = active |
+| RECORD_CREATED_AT | TIMESTAMP_NTZ | When record was first inserted |
+| RECORD_UPDATED_AT | TIMESTAMP_NTZ | When record was last modified |
+| SOURCE_LOAD_BATCH_ID | VARCHAR(100) | Unique batch identifier for tracing |
+
+### 10.2 Stream Metadata Columns Reference
+
+Streams provide these metadata columns:
+
+| Column Name | Description |
+|-------------|-------------|
+| METADATA$ACTION | INSERT or DELETE |
+| METADATA$ISUPDATE | TRUE if this is an UPDATE operation |
+| METADATA$ROW_ID | Unique row identifier |
+
+### 10.3 Processing Status Values
+
+| Status | Description |
+|--------|-------------|
+| SUCCESS | Processing completed without errors |
+| NO_DATA | No changes found in stream |
+| ERROR | Processing failed with error |
+| STREAM_STALE_RECOVERED | Stream was stale and has been recreated |
+
+### 10.4 File Inventory
+
+| File | Lines | Size | Purpose |
+|------|-------|------|---------|
+| 00_DEPLOYMENT_GUIDE.md | 217 | 7.3 KB | Overview documentation |
+| 01_SET_PARAMETERS.sql | 106 | 4.1 KB | Environment configuration |
+| 02_CDC_INFRASTRUCTURE.sql | 253 | 9.0 KB | Audit table and views |
+| 03_CREATE_ALL_TARGET_TABLES.sql | 671 | 28.6 KB | 21 target tables |
+| 04_ENABLE_CHANGE_TRACKING.sql | 189 | 7.3 KB | Enable CDC on source |
+| 05_CREATE_ALL_STREAMS.sql | 186 | 7.5 KB | 21 CDC streams |
+| 06_CREATE_ALL_PROCEDURES.sql | 784 | 49.4 KB | 21 stored procedures |
+| 07_CREATE_ALL_TASKS.sql | 262 | 9.3 KB | 21 scheduled tasks |
+| 08_RESUME_ALL_TASKS.sql | 166 | 5.3 KB | Task activation |
+| PRODUCTION_RUNBOOK.md | ~1500 | ~60 KB | This document |
+
+---
+
+## DOCUMENT APPROVAL
+
+| Role | Name | Date | Signature |
+|------|------|------|-----------|
+| Author | Snowflake Consultant | 2026-02-23 | __________ |
+| Technical Reviewer | __________________ | __________ | __________ |
+| Customer Approval | __________________ | __________ | __________ |
+| Deployment Lead | __________________ | __________ | __________ |
+
+---
+
+```
+================================================================================
+                         END OF PRODUCTION RUNBOOK
+================================================================================
+Document Version: 1.0
+Classification: PRODUCTION - CUSTOMER DEPLOYMENT
+Total Pages: ~30
+================================================================================
+```
