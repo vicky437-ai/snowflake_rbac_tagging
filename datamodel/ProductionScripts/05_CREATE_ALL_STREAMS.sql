@@ -1,0 +1,185 @@
+/*
+================================================================================
+CDC DATA PRESERVATION - CREATE ALL STREAMS
+================================================================================
+Purpose      : Create CDC streams on all 21 source _BASE tables
+Version      : 1.0 (Production)
+Last Updated : 2026-02-23
+================================================================================
+
+PREREQUISITES:
+- Execute 01_SET_PARAMETERS.sql first
+- Execute 04_ENABLE_CHANGE_TRACKING.sql first
+- Source tables must have CHANGE_TRACKING = TRUE
+
+================================================================================
+*/
+
+-- =============================================================================
+-- USE PARAMETERS FROM SESSION
+-- =============================================================================
+USE DATABASE IDENTIFIER($SOURCE_DATABASE);
+USE SCHEMA IDENTIFIER($SOURCE_SCHEMA);
+USE WAREHOUSE IDENTIFIER($CDC_WAREHOUSE);
+
+-- =============================================================================
+-- CREATE CDC STREAMS WITH SHOW_INITIAL_ROWS = TRUE
+-- This enables initial load to capture all existing data
+-- =============================================================================
+
+-- Stream 1: TRAIN_PLAN
+CREATE OR REPLACE STREAM TRAIN_PLAN_BASE_HIST_STREAM 
+ON TABLE TRAIN_PLAN_BASE
+SHOW_INITIAL_ROWS = TRUE
+COMMENT = 'CDC stream for TRAIN_PLAN_BASE. Captures INSERT, UPDATE, DELETE with initial load.';
+
+-- Stream 2: OPTRN
+CREATE OR REPLACE STREAM OPTRN_BASE_HIST_STREAM 
+ON TABLE OPTRN_BASE
+SHOW_INITIAL_ROWS = TRUE
+COMMENT = 'CDC stream for OPTRN_BASE. Captures INSERT, UPDATE, DELETE with initial load.';
+
+-- Stream 3: OPTRN_LEG
+CREATE OR REPLACE STREAM OPTRN_LEG_BASE_HIST_STREAM 
+ON TABLE OPTRN_LEG_BASE
+SHOW_INITIAL_ROWS = TRUE
+COMMENT = 'CDC stream for OPTRN_LEG_BASE. Captures INSERT, UPDATE, DELETE with initial load.';
+
+-- Stream 4: OPTRN_EVENT
+CREATE OR REPLACE STREAM OPTRN_EVENT_BASE_HIST_STREAM 
+ON TABLE OPTRN_EVENT_BASE
+SHOW_INITIAL_ROWS = TRUE
+COMMENT = 'CDC stream for OPTRN_EVENT_BASE. Captures INSERT, UPDATE, DELETE with initial load.';
+
+-- Stream 5: TRKFC_TRSTN
+CREATE OR REPLACE STREAM TRKFC_TRSTN_BASE_HIST_STREAM 
+ON TABLE TRKFC_TRSTN_BASE
+SHOW_INITIAL_ROWS = TRUE
+COMMENT = 'CDC stream for TRKFC_TRSTN_BASE. Captures INSERT, UPDATE, DELETE with initial load.';
+
+-- Stream 6: TRAIN_CNST_SMRY
+CREATE OR REPLACE STREAM TRAIN_CNST_SMRY_BASE_HIST_STREAM 
+ON TABLE TRAIN_CNST_SMRY_BASE
+SHOW_INITIAL_ROWS = TRUE
+COMMENT = 'CDC stream for TRAIN_CNST_SMRY_BASE. Captures INSERT, UPDATE, DELETE with initial load.';
+
+-- Stream 7: STNWYB_MSG_DN
+CREATE OR REPLACE STREAM STNWYB_MSG_DN_BASE_HIST_STREAM 
+ON TABLE STNWYB_MSG_DN_BASE
+SHOW_INITIAL_ROWS = TRUE
+COMMENT = 'CDC stream for STNWYB_MSG_DN_BASE. Captures INSERT, UPDATE, DELETE with initial load.';
+
+-- Stream 8: EQPMNT_AAR_BASE
+CREATE OR REPLACE STREAM EQPMNT_AAR_BASE_HIST_STREAM 
+ON TABLE EQPMNT_AAR_BASE
+SHOW_INITIAL_ROWS = TRUE
+COMMENT = 'CDC stream for EQPMNT_AAR_BASE. Captures INSERT, UPDATE, DELETE with initial load.';
+
+-- Stream 9: EQPMV_RFEQP_MVMNT_EVENT
+CREATE OR REPLACE STREAM EQPMV_RFEQP_MVMNT_EVENT_BASE_HIST_STREAM 
+ON TABLE EQPMV_RFEQP_MVMNT_EVENT_BASE
+SHOW_INITIAL_ROWS = TRUE
+COMMENT = 'CDC stream for EQPMV_RFEQP_MVMNT_EVENT_BASE. Captures INSERT, UPDATE, DELETE with initial load.';
+
+-- Stream 10: CTNAPP_CTNG_LINE_DN
+CREATE OR REPLACE STREAM CTNAPP_CTNG_LINE_DN_BASE_HIST_STREAM 
+ON TABLE CTNAPP_CTNG_LINE_DN_BASE
+SHOW_INITIAL_ROWS = TRUE
+COMMENT = 'CDC stream for CTNAPP_CTNG_LINE_DN_BASE. Captures INSERT, UPDATE, DELETE with initial load.';
+
+-- Stream 11: EQPMV_EQPMT_EVENT_TYPE
+CREATE OR REPLACE STREAM EQPMV_EQPMT_EVENT_TYPE_BASE_HIST_STREAM 
+ON TABLE EQPMV_EQPMT_EVENT_TYPE_BASE
+SHOW_INITIAL_ROWS = TRUE
+COMMENT = 'CDC stream for EQPMV_EQPMT_EVENT_TYPE_BASE. Captures INSERT, UPDATE, DELETE with initial load.';
+
+-- Stream 12: TRAIN_PLAN_EVENT
+CREATE OR REPLACE STREAM TRAIN_PLAN_EVENT_BASE_HIST_STREAM 
+ON TABLE TRAIN_PLAN_EVENT_BASE
+SHOW_INITIAL_ROWS = TRUE
+COMMENT = 'CDC stream for TRAIN_PLAN_EVENT_BASE. Captures INSERT, UPDATE, DELETE with initial load.';
+
+-- Stream 13: LCMTV_MVMNT_EVENT
+CREATE OR REPLACE STREAM LCMTV_MVMNT_EVENT_BASE_HIST_STREAM 
+ON TABLE LCMTV_MVMNT_EVENT_BASE
+SHOW_INITIAL_ROWS = TRUE
+COMMENT = 'CDC stream for LCMTV_MVMNT_EVENT_BASE. Captures INSERT, UPDATE, DELETE with initial load.';
+
+-- Stream 14: LCMTV_EMIS
+CREATE OR REPLACE STREAM LCMTV_EMIS_BASE_HIST_STREAM 
+ON TABLE LCMTV_EMIS_BASE
+SHOW_INITIAL_ROWS = TRUE
+COMMENT = 'CDC stream for LCMTV_EMIS_BASE. Captures INSERT, UPDATE, DELETE with initial load.';
+
+-- Stream 15: TRAIN_PLAN_LEG
+CREATE OR REPLACE STREAM TRAIN_PLAN_LEG_BASE_HIST_STREAM 
+ON TABLE TRAIN_PLAN_LEG_BASE
+SHOW_INITIAL_ROWS = TRUE
+COMMENT = 'CDC stream for TRAIN_PLAN_LEG_BASE. Captures INSERT, UPDATE, DELETE with initial load.';
+
+-- Stream 16: TRKFCG_SBDVSN
+CREATE OR REPLACE STREAM TRKFCG_SBDVSN_BASE_HIST_STREAM 
+ON TABLE TRKFCG_SBDVSN_BASE
+SHOW_INITIAL_ROWS = TRUE
+COMMENT = 'CDC stream for TRKFCG_SBDVSN_BASE. Captures INSERT, UPDATE, DELETE with initial load.';
+
+-- Stream 17: TRKFCG_FIXED_PLANT_ASSET
+CREATE OR REPLACE STREAM TRKFCG_FIXED_PLANT_ASSET_BASE_HIST_STREAM 
+ON TABLE TRKFCG_FIXED_PLANT_ASSET_BASE
+SHOW_INITIAL_ROWS = TRUE
+COMMENT = 'CDC stream for TRKFCG_FIXED_PLANT_ASSET_BASE. Captures INSERT, UPDATE, DELETE with initial load.';
+
+-- Stream 18: TRKFCG_FXPLA_TRACK_LCTN_DN
+CREATE OR REPLACE STREAM TRKFCG_FXPLA_TRACK_LCTN_DN_BASE_HIST_STREAM 
+ON TABLE TRKFCG_FXPLA_TRACK_LCTN_DN_BASE
+SHOW_INITIAL_ROWS = TRUE
+COMMENT = 'CDC stream for TRKFCG_FXPLA_TRACK_LCTN_DN_BASE. Captures INSERT, UPDATE, DELETE with initial load.';
+
+-- Stream 19: TRAIN_CNST_DTL_RAIL_EQPT
+CREATE OR REPLACE STREAM TRAIN_CNST_DTL_RAIL_EQPT_BASE_HIST_STREAM 
+ON TABLE TRAIN_CNST_DTL_RAIL_EQPT_BASE
+SHOW_INITIAL_ROWS = TRUE
+COMMENT = 'CDC stream for TRAIN_CNST_DTL_RAIL_EQPT_BASE. Captures INSERT, UPDATE, DELETE with initial load.';
+
+-- Stream 20: TRKFCG_TRACK_SGMNT_DN
+CREATE OR REPLACE STREAM TRKFCG_TRACK_SGMNT_DN_BASE_HIST_STREAM 
+ON TABLE TRKFCG_TRACK_SGMNT_DN_BASE
+SHOW_INITIAL_ROWS = TRUE
+COMMENT = 'CDC stream for TRKFCG_TRACK_SGMNT_DN_BASE. Captures INSERT, UPDATE, DELETE with initial load.';
+
+-- Stream 21: TRKFCG_SRVC_AREA
+CREATE OR REPLACE STREAM TRKFCG_SRVC_AREA_BASE_HIST_STREAM 
+ON TABLE TRKFCG_SRVC_AREA_BASE
+SHOW_INITIAL_ROWS = TRUE
+COMMENT = 'CDC stream for TRKFCG_SRVC_AREA_BASE. Captures INSERT, UPDATE, DELETE with initial load.';
+
+-- =============================================================================
+-- VERIFICATION
+-- =============================================================================
+SELECT 
+    STREAM_NAME,
+    TABLE_NAME,
+    STALE AS IS_STALE,
+    STALE_AFTER,
+    CREATED,
+    COMMENT
+FROM TABLE(INFORMATION_SCHEMA.STREAMS())
+WHERE STREAM_NAME LIKE '%_HIST_STREAM'
+ORDER BY STREAM_NAME;
+
+/*
+================================================================================
+21 CDC STREAMS CREATED
+================================================================================
+Stream Configuration:
+- SHOW_INITIAL_ROWS = TRUE (captures existing data on first read)
+- Type: Standard Stream
+- Captures: INSERT, UPDATE, DELETE operations
+- Metadata available: METADATA$ACTION, METADATA$ISUPDATE, METADATA$ROW_ID
+
+IMPORTANT: 
+- Streams become STALE if not consumed within DATA_RETENTION window
+- Monitor STALE_AFTER timestamp to prevent data loss
+- Procedures auto-recover from stale streams by recreating them
+================================================================================
+*/
