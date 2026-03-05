@@ -1,0 +1,67 @@
+-- Recovery path does this:
+CREATE OR REPLACE STREAM ...   -- ✓ Creates stream
+MERGE INTO ... USING (         
+    FROM D_RAW.SADB.OPTRN_EVENT_BASE src  -- ❌ Reads from BASE TABLE, not stream!
+    ...
+)
+RETURN 'RECOVERY_COMPLETE';    -- ❌ Returns without consuming stream!
+
+Timeline:
+─────────────────────────────────────────────────────────────────────────────
+T0:  IDMC drops source table
+T1:  Stream becomes STALE
+T2:  IDMC starts reloading 1.3M records
+T3:  Task triggers (while IDMC still loading!)
+     → Detects stale stream
+     → Recreates stream (captures only rows loaded so far)
+     → Recovery MERGE runs (only sees partial data)
+T4:  Task returns "RECOVERY_COMPLETE" 
+T5:  IDMC finishes loading remaining records (including 76K new)
+     → These records were inserted AFTER stream creation
+     → NOT captured in SHOW_INITIAL_ROWS
+     → NEVER picked up by future normal processing!
+─────────────────────────────────────────────────────────────────────────────
+                         ↑
+              76K RECORDS PERMANENTLY LOST
+
+WHERE tgt.OPTRN_EVENT_ID IS NULL    -- New records ✓
+   OR tgt.IS_DELETED = TRUE          -- Deleted records ✓
+
+
+   MERGE INTO D_BRONZE.SADB.OPTRN_EVENT AS tgt
+USING (
+    SELECT src.*, 'INSERT' AS CDC_OP, :v_batch_id AS BATCH_ID
+    FROM D_RAW.SADB.OPTRN_EVENT_BASE_HIST_STREAM src   -- ← Even if you change to stream
+    LEFT JOIN D_BRONZE.SADB.OPTRN_EVENT tgt 
+        ON src.OPTRN_EVENT_ID = tgt.OPTRN_EVENT_ID
+    WHERE tgt.OPTRN_EVENT_ID IS NULL                    -- ← THIS FILTER IS THE BUG!
+       OR tgt.IS_DELETED = TRUE                         -- ← Still excludes existing records!
+) AS src
+
+
+=======
+
+IF (v_stream_stale = TRUE) THEN
+    -- Recreate stream
+    CREATE OR REPLACE STREAM D_RAW.SADB.OPTRN_EVENT_BASE_HIST_STREAM
+    ON TABLE D_RAW.SADB.OPTRN_EVENT_BASE
+    SHOW_INITIAL_ROWS = TRUE;
+    
+    -- MERGE directly from stream (no WHERE filter!)
+    MERGE INTO D_BRONZE.SADB.OPTRN_EVENT AS tgt
+    USING (
+        SELECT 
+            src.*,
+            'INSERT' AS CDC_OP,
+            :v_batch_id AS BATCH_ID
+        FROM D_RAW.SADB.OPTRN_EVENT_BASE_HIST_STREAM src
+    ) AS src
+    ON tgt.OPTRN_EVENT_ID = src.OPTRN_EVENT_ID
+    WHEN MATCHED THEN UPDATE SET ...
+    WHEN NOT MATCHED THEN INSERT ...;
+    
+    v_rows_merged := SQLROWCOUNT;
+    
+    -- Log for verification
+    RETURN 'RECOVERY_COMPLETE: ' || v_rows_merged || ' rows. Batch: ' || v_batch_id;
+END IF;
