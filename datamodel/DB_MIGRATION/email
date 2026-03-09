@@ -190,3 +190,5 @@ I will review the existing objects and align them with the agreed standards. In 
 
 Thanks,
 Vicky
+
+We were not added Schema name in table's name for three objects(OPTRN,OPTRN_LEG,OPTRN_EVENT) Initially it got missed in IDMC  however now got addedd so I will modify those objects accordagly.
