@@ -177,3 +177,16 @@ Also, thank you for the heads-up regarding the temporary resources and the poten
 
 Thanks,
 Vicky
+
+Hi David,
+
+Thank you for bringing this up.
+
+Most of the objects currently created were part of demo, testing, and validation activities. I will work with Naveen and Harish to review and clean them up to ensure consistency.
+
+As discussed earlier, I have been following the naming standards for the D_RAW to D_BRONZE layer jobs, and the downstream layers are also intended to follow the same convention.
+
+I will review the existing objects and align them with the agreed standards. In the meantime, please let me know if you notice any specific inconsistencies in the current naming conventions.
+
+Thanks,
+Vicky
