@@ -161,3 +161,19 @@ For validation purposes, I have implemented the above changes for the OPTRN_EVEN
 Based on my analysis of the other tables, I noticed that the purge user (TSDPRG) is not consistent across all tables. Could you please provide the correct purge user for the tables listed below so that I can apply the appropriate filter condition?
 
 Thank you.
+
+
+Subject: Confirmation of Port for PostgreSQL NLB Connection
+
+Hi Ruben,
+
+Thank you for setting up the Network Load Balancer and sharing the PrivateLink endpoint details.
+
+To proceed with configuring the Snowflake network rule and external access integration for the OpenFlow PostgreSQL CDC connector, could you please confirm which port the NLB is currently listening on for the PostgreSQL connection?
+
+Once I have the port details, I will proceed with creating the required Snowflake network rules and integration to establish the connection from Snowflake OpenFlow to the PostgreSQL instance.
+
+Also, thank you for the heads-up regarding the temporary resources and the potential RDS IP change after failover. I will keep you posted once the testing is completed.
+
+Thanks,
+Vicky
