@@ -139,3 +139,25 @@ Babu and Naveen will discuss on the best approach to set up this new database an
 Thanks,
 
 David
+
+
+
+Hi Team, Good morning,
+
+Thank you for providing the details.
+
+Based on the discussion, I would like to implement the following changes in the RAW to BRONZE scripts:
+
+Add the SNW_OPERATION_OWNER column to the BRONZE layer tables.
+
+Use the SNW_OPERATION_OWNER column as a filter condition to ensure that purged records are excluded and do not flow into the BRONZE tables.
+
+Could you please review and validate these proposed changes? Once approved, I will proceed with preparing the updated scripts.
+
+@Hirish
+
+For validation purposes, I have implemented the above changes for the OPTRN_EVENT table. Could you please review and confirm if everything looks correct?
+
+Based on my analysis of the other tables, I noticed that the purge user (TSDPRG) is not consistent across all tables. Could you please provide the correct purge user for the tables listed below so that I can apply the appropriate filter condition?
+
+Thank you.
