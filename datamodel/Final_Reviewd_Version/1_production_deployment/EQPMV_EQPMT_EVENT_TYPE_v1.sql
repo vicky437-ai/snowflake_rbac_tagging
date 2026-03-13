@@ -1,0 +1,462 @@
+/*
+================================================================================
+DATA PRESERVATION SCRIPT FOR D_RAW.SADB.EQPMV_EQPMT_EVENT_TYPE_BASE
+================================================================================
+Source Table : D_RAW.SADB.EQPMV_EQPMT_EVENT_TYPE_BASE
+Target Table : D_BRONZE.SADB.EQPMV_EQPMT_EVENT_TYPE
+Stream       : D_RAW.SADB.EQPMV_EQPMT_EVENT_TYPE_BASE_HIST_STREAM
+Procedure    : D_RAW.SADB.SP_PROCESS_EQPMV_EQPMT_EVENT_TYPE()
+Task         : D_RAW.SADB.TASK_PROCESS_EQPMV_EQPMT_EVENT_TYPE
+Primary Key  : EQPMT_EVENT_TYPE_ID (Single)
+Total Columns: 25 source + 6 CDC metadata = 31
+Filter       : SNW_OPERATION_OWNER NOT IN ('TSDPRG','EMEPRG') (exclude purged records)
+================================================================================
+VERSION      : v1.0
+DATE         : 2026-03-13
+CHANGES      : 
+  - Added SYSTEM$STREAM_GET_STALE_AFTER() for proactive staleness detection
+  - Added execution logging to D_BRONZE.MONITORING.CDC_EXECUTION_LOG
+================================================================================
+*/
+
+-- =============================================================================
+-- STEP 1: Create Target Data Preservation Table
+-- =============================================================================
+CREATE OR ALTER TABLE D_BRONZE.SADB.EQPMV_EQPMT_EVENT_TYPE (
+    EQPMT_EVENT_TYPE_ID NUMBER(18,0) NOT NULL,
+    TRNII_EVENT_CD VARCHAR(16),
+    YARDS_EVENT_CD VARCHAR(12),
+    IMDL_EVENT_CD VARCHAR(12),
+    TRAIN_EVENT_CD VARCHAR(16),
+    MTP_CAR_EVENT_CD VARCHAR(4),
+    FSTWY_EVENT_CD VARCHAR(12),
+    BAD_ORDER_EVENT_CD VARCHAR(12),
+    SMS_EVENT_CD VARCHAR(12),
+    AEI_EVENT_CD VARCHAR(32),
+    DSCRPT_TEXT VARCHAR(320),
+    CREATE_USER_ID VARCHAR(32),
+    UPDATE_USER_ID VARCHAR(32),
+    RECORD_CREATE_TMS TIMESTAMP_NTZ(0),
+    RECORD_UPDATE_TMS TIMESTAMP_NTZ(0),
+    LMS_EVENT_CD VARCHAR(16),
+    EVENT_ACTIVE_IND VARCHAR(4),
+    EVENT_TYPE_CD VARCHAR(40),
+    AAR_STNDRD_EVENT_CD VARCHAR(16),
+    EDI_EVENT_CD VARCHAR(8),
+    EDI_EVENT_CD_QLFR VARCHAR(48),
+    YARD_TRACK_MVMNT_EVENT_CD VARCHAR(32),
+    SNW_OPERATION_TYPE VARCHAR(1),
+    SNW_LAST_REPLICATED TIMESTAMP_NTZ(9),
+
+    CDC_OPERATION VARCHAR(10),
+    CDC_TIMESTAMP TIMESTAMP_NTZ,
+    IS_DELETED BOOLEAN,
+    RECORD_CREATED_AT TIMESTAMP_NTZ,
+    RECORD_UPDATED_AT TIMESTAMP_NTZ,
+    SOURCE_LOAD_BATCH_ID VARCHAR(100),
+    SNW_OPERATION_OWNER VARCHAR(256),
+
+    PRIMARY KEY (EQPMT_EVENT_TYPE_ID)
+);
+
+-- =============================================================================
+-- STEP 2: Enable Change Tracking on Source Table
+-- =============================================================================
+ALTER TABLE D_RAW.SADB.EQPMV_EQPMT_EVENT_TYPE_BASE 
+SET CHANGE_TRACKING = TRUE,
+    DATA_RETENTION_TIME_IN_DAYS = 45,
+    MAX_DATA_EXTENSION_TIME_IN_DAYS = 15;
+
+-- =============================================================================
+-- STEP 3: Create Stream with SHOW_INITIAL_ROWS for Initial Load
+-- =============================================================================
+CREATE OR REPLACE STREAM D_RAW.SADB.EQPMV_EQPMT_EVENT_TYPE_BASE_HIST_STREAM
+ON TABLE D_RAW.SADB.EQPMV_EQPMT_EVENT_TYPE_BASE
+SHOW_INITIAL_ROWS = TRUE
+COMMENT = 'CDC Stream for EQPMV_EQPMT_EVENT_TYPE_BASE data preservation. SHOW_INITIAL_ROWS=TRUE for initial load.';
+
+-- =============================================================================
+-- STEP 4: Create Stored Procedure for CDC Processing (ENHANCED v1)
+-- =============================================================================
+CREATE OR REPLACE PROCEDURE D_RAW.SADB.SP_PROCESS_EQPMV_EQPMT_EVENT_TYPE()
+RETURNS VARCHAR
+LANGUAGE SQL
+EXECUTE AS CALLER
+AS
+$$
+DECLARE
+    v_batch_id VARCHAR;
+    v_stream_stale BOOLEAN DEFAULT FALSE;
+    v_staging_count NUMBER DEFAULT 0;
+    v_rows_merged NUMBER DEFAULT 0;
+    v_rows_inserted NUMBER DEFAULT 0;
+    v_rows_updated NUMBER DEFAULT 0;
+    v_rows_deleted NUMBER DEFAULT 0;
+    v_result VARCHAR;
+    v_error_msg VARCHAR;
+    v_stale_after TIMESTAMP_NTZ;
+    v_start_time TIMESTAMP_NTZ;
+    v_end_time TIMESTAMP_NTZ;
+    v_execution_status VARCHAR DEFAULT 'SUCCESS';
+BEGIN
+    v_batch_id := 'BATCH_' || TO_VARCHAR(CURRENT_TIMESTAMP(), 'YYYYMMDD_HH24MISS');
+    v_start_time := CURRENT_TIMESTAMP();
+    
+    -- =========================================================================
+    -- CHECK 1: PROACTIVE staleness detection using SYSTEM$STREAM_GET_STALE_AFTER()
+    -- This runs BEFORE reading the stream to prevent processing stale data
+    -- =========================================================================
+    BEGIN
+        SELECT SYSTEM$STREAM_GET_STALE_AFTER('D_RAW.SADB.EQPMV_EQPMT_EVENT_TYPE_BASE_HIST_STREAM') INTO v_stale_after;
+        
+        IF (v_stale_after IS NOT NULL AND v_stale_after <= CURRENT_TIMESTAMP()) THEN
+            v_stream_stale := TRUE;
+            v_error_msg := 'Stream stale_after timestamp (' || v_stale_after::VARCHAR || ') is in the past';
+        ELSE
+            v_stream_stale := FALSE;
+        END IF;
+        
+    EXCEPTION
+        WHEN OTHER THEN
+            v_stream_stale := TRUE;
+            v_error_msg := 'Stream staleness check failed: ' || SQLERRM;
+    END;
+    
+    -- =========================================================================
+    -- FALLBACK CHECK: Try to read stream to confirm it's accessible
+    -- =========================================================================
+    IF (v_stream_stale = FALSE) THEN
+        BEGIN
+            SELECT COUNT(*) INTO v_staging_count 
+            FROM D_RAW.SADB.EQPMV_EQPMT_EVENT_TYPE_BASE_HIST_STREAM
+            WHERE 1=0;
+            
+            v_stream_stale := FALSE;
+            
+        EXCEPTION
+            WHEN OTHER THEN
+                v_stream_stale := TRUE;
+                v_error_msg := NVL(v_error_msg, '') || ' | Stream read failed: ' || SQLERRM;
+        END;
+    END IF;
+    
+    -- =========================================================================
+    -- RECOVERY: If stream is stale, recreate it and do full reload
+    -- =========================================================================
+    IF (v_stream_stale = TRUE) THEN
+        v_result := 'STREAM_STALE_DETECTED: ' || NVL(v_error_msg, 'Unknown') || ' - Initiating recovery at ' || CURRENT_TIMESTAMP()::VARCHAR;
+        v_execution_status := 'RECOVERY';
+        
+        CREATE OR REPLACE STREAM D_RAW.SADB.EQPMV_EQPMT_EVENT_TYPE_BASE_HIST_STREAM
+        ON TABLE D_RAW.SADB.EQPMV_EQPMT_EVENT_TYPE_BASE
+        SHOW_INITIAL_ROWS = TRUE
+        COMMENT = 'CDC Stream recreated after staleness detection';
+        
+        MERGE INTO D_BRONZE.SADB.EQPMV_EQPMT_EVENT_TYPE AS tgt
+        USING (
+            SELECT 
+                src.*,
+                'INSERT' AS CDC_OP,
+                :v_batch_id AS BATCH_ID
+            FROM D_RAW.SADB.EQPMV_EQPMT_EVENT_TYPE_BASE_HIST_STREAM src
+            WHERE NVL(src.SNW_OPERATION_OWNER, '') NOT IN ('TSDPRG', 'EMEPRG')
+        ) AS src
+        ON tgt.EQPMT_EVENT_TYPE_ID = src.EQPMT_EVENT_TYPE_ID
+        WHEN MATCHED THEN UPDATE SET
+            tgt.TRNII_EVENT_CD = src.TRNII_EVENT_CD,
+            tgt.YARDS_EVENT_CD = src.YARDS_EVENT_CD,
+            tgt.IMDL_EVENT_CD = src.IMDL_EVENT_CD,
+            tgt.TRAIN_EVENT_CD = src.TRAIN_EVENT_CD,
+            tgt.MTP_CAR_EVENT_CD = src.MTP_CAR_EVENT_CD,
+            tgt.FSTWY_EVENT_CD = src.FSTWY_EVENT_CD,
+            tgt.BAD_ORDER_EVENT_CD = src.BAD_ORDER_EVENT_CD,
+            tgt.SMS_EVENT_CD = src.SMS_EVENT_CD,
+            tgt.AEI_EVENT_CD = src.AEI_EVENT_CD,
+            tgt.DSCRPT_TEXT = src.DSCRPT_TEXT,
+            tgt.CREATE_USER_ID = src.CREATE_USER_ID,
+            tgt.UPDATE_USER_ID = src.UPDATE_USER_ID,
+            tgt.RECORD_CREATE_TMS = src.RECORD_CREATE_TMS,
+            tgt.RECORD_UPDATE_TMS = src.RECORD_UPDATE_TMS,
+            tgt.LMS_EVENT_CD = src.LMS_EVENT_CD,
+            tgt.EVENT_ACTIVE_IND = src.EVENT_ACTIVE_IND,
+            tgt.EVENT_TYPE_CD = src.EVENT_TYPE_CD,
+            tgt.AAR_STNDRD_EVENT_CD = src.AAR_STNDRD_EVENT_CD,
+            tgt.EDI_EVENT_CD = src.EDI_EVENT_CD,
+            tgt.EDI_EVENT_CD_QLFR = src.EDI_EVENT_CD_QLFR,
+            tgt.YARD_TRACK_MVMNT_EVENT_CD = src.YARD_TRACK_MVMNT_EVENT_CD,
+            tgt.SNW_OPERATION_TYPE = src.SNW_OPERATION_TYPE,
+            tgt.SNW_OPERATION_OWNER = src.SNW_OPERATION_OWNER,
+            tgt.SNW_LAST_REPLICATED = src.SNW_LAST_REPLICATED,
+            tgt.CDC_OPERATION = 'RELOADED',
+            tgt.CDC_TIMESTAMP = CURRENT_TIMESTAMP(),
+            tgt.IS_DELETED = FALSE,
+            tgt.RECORD_UPDATED_AT = CURRENT_TIMESTAMP(),
+            tgt.SOURCE_LOAD_BATCH_ID = src.BATCH_ID
+        WHEN NOT MATCHED THEN INSERT (
+            EQPMT_EVENT_TYPE_ID, TRNII_EVENT_CD, YARDS_EVENT_CD, IMDL_EVENT_CD, TRAIN_EVENT_CD,
+            MTP_CAR_EVENT_CD, FSTWY_EVENT_CD, BAD_ORDER_EVENT_CD, SMS_EVENT_CD, AEI_EVENT_CD,
+            DSCRPT_TEXT, CREATE_USER_ID, UPDATE_USER_ID, RECORD_CREATE_TMS, RECORD_UPDATE_TMS,
+            LMS_EVENT_CD, EVENT_ACTIVE_IND, EVENT_TYPE_CD, AAR_STNDRD_EVENT_CD, EDI_EVENT_CD,
+            EDI_EVENT_CD_QLFR, YARD_TRACK_MVMNT_EVENT_CD, SNW_OPERATION_TYPE, SNW_OPERATION_OWNER, SNW_LAST_REPLICATED,
+            CDC_OPERATION, CDC_TIMESTAMP, IS_DELETED, RECORD_CREATED_AT, RECORD_UPDATED_AT, SOURCE_LOAD_BATCH_ID
+        ) VALUES (
+            src.EQPMT_EVENT_TYPE_ID, src.TRNII_EVENT_CD, src.YARDS_EVENT_CD, src.IMDL_EVENT_CD, src.TRAIN_EVENT_CD,
+            src.MTP_CAR_EVENT_CD, src.FSTWY_EVENT_CD, src.BAD_ORDER_EVENT_CD, src.SMS_EVENT_CD, src.AEI_EVENT_CD,
+            src.DSCRPT_TEXT, src.CREATE_USER_ID, src.UPDATE_USER_ID, src.RECORD_CREATE_TMS, src.RECORD_UPDATE_TMS,
+            src.LMS_EVENT_CD, src.EVENT_ACTIVE_IND, src.EVENT_TYPE_CD, src.AAR_STNDRD_EVENT_CD, src.EDI_EVENT_CD,
+            src.EDI_EVENT_CD_QLFR, src.YARD_TRACK_MVMNT_EVENT_CD, src.SNW_OPERATION_TYPE, src.SNW_OPERATION_OWNER, src.SNW_LAST_REPLICATED,
+            'INSERT', CURRENT_TIMESTAMP(), FALSE, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP(), src.BATCH_ID
+        );
+        
+        v_rows_merged := SQLROWCOUNT;
+        v_end_time := CURRENT_TIMESTAMP();
+        
+        INSERT INTO D_BRONZE.MONITORING.CDC_EXECUTION_LOG (
+            TABLE_NAME, BATCH_ID, EXECUTION_STATUS, START_TIME, END_TIME,
+            ROWS_PROCESSED, ROWS_INSERTED, ROWS_UPDATED, ROWS_DELETED,
+            ERROR_MESSAGE, CREATED_AT
+        ) VALUES (
+            'EQPMV_EQPMT_EVENT_TYPE', :v_batch_id, 'RECOVERY', :v_start_time, :v_end_time,
+            :v_rows_merged, :v_rows_merged, 0, 0,
+            :v_error_msg, CURRENT_TIMESTAMP()
+        );
+        
+        RETURN 'RECOVERY_COMPLETE: Stream recreated, ' || v_rows_merged || ' rows merged. Batch: ' || v_batch_id;
+    END IF;
+    
+    -- =========================================================================
+    -- CHECK 2: Stage stream data into temp table (BEST PRACTICE - single read)
+    -- =========================================================================
+    CREATE OR REPLACE TEMPORARY TABLE _CDC_STAGING_EQPMV_EQPMT_EVENT_TYPE AS
+    SELECT 
+        EQPMT_EVENT_TYPE_ID, TRNII_EVENT_CD, YARDS_EVENT_CD, IMDL_EVENT_CD, TRAIN_EVENT_CD,
+        MTP_CAR_EVENT_CD, FSTWY_EVENT_CD, BAD_ORDER_EVENT_CD, SMS_EVENT_CD, AEI_EVENT_CD,
+        DSCRPT_TEXT, CREATE_USER_ID, UPDATE_USER_ID, RECORD_CREATE_TMS, RECORD_UPDATE_TMS,
+        LMS_EVENT_CD, EVENT_ACTIVE_IND, EVENT_TYPE_CD, AAR_STNDRD_EVENT_CD, EDI_EVENT_CD,
+        EDI_EVENT_CD_QLFR, YARD_TRACK_MVMNT_EVENT_CD, SNW_OPERATION_TYPE, SNW_OPERATION_OWNER, SNW_LAST_REPLICATED,
+        METADATA$ACTION AS CDC_ACTION,
+        METADATA$ISUPDATE AS CDC_IS_UPDATE,
+        METADATA$ROW_ID AS ROW_ID
+    FROM D_RAW.SADB.EQPMV_EQPMT_EVENT_TYPE_BASE_HIST_STREAM
+    WHERE NVL(SNW_OPERATION_OWNER, '') NOT IN ('TSDPRG', 'EMEPRG');
+    
+    SELECT COUNT(*) INTO v_staging_count FROM _CDC_STAGING_EQPMV_EQPMT_EVENT_TYPE;
+    
+    IF (v_staging_count = 0) THEN
+        DROP TABLE IF EXISTS _CDC_STAGING_EQPMV_EQPMT_EVENT_TYPE;
+        v_end_time := CURRENT_TIMESTAMP();
+        
+        INSERT INTO D_BRONZE.MONITORING.CDC_EXECUTION_LOG (
+            TABLE_NAME, BATCH_ID, EXECUTION_STATUS, START_TIME, END_TIME,
+            ROWS_PROCESSED, ROWS_INSERTED, ROWS_UPDATED, ROWS_DELETED,
+            ERROR_MESSAGE, CREATED_AT
+        ) VALUES (
+            'EQPMV_EQPMT_EVENT_TYPE', :v_batch_id, 'NO_DATA', :v_start_time, :v_end_time,
+            0, 0, 0, 0,
+            NULL, CURRENT_TIMESTAMP()
+        );
+        
+        RETURN 'NO_DATA: Stream has no changes to process at ' || CURRENT_TIMESTAMP()::VARCHAR;
+    END IF;
+    
+    -- =========================================================================
+    -- PRE-MERGE METRICS: Count by operation type for logging
+    -- =========================================================================
+    SELECT 
+        COUNT(CASE WHEN CDC_ACTION = 'INSERT' AND CDC_IS_UPDATE = FALSE THEN 1 END),
+        COUNT(CASE WHEN CDC_ACTION = 'INSERT' AND CDC_IS_UPDATE = TRUE THEN 1 END),
+        COUNT(CASE WHEN CDC_ACTION = 'DELETE' AND CDC_IS_UPDATE = FALSE THEN 1 END)
+    INTO v_rows_inserted, v_rows_updated, v_rows_deleted
+    FROM _CDC_STAGING_EQPMV_EQPMT_EVENT_TYPE;
+    
+    -- =========================================================================
+    -- MAIN PROCESSING: MERGE CDC changes from staging into Data Preservation table
+    -- =========================================================================
+    MERGE INTO D_BRONZE.SADB.EQPMV_EQPMT_EVENT_TYPE AS tgt
+    USING (
+        SELECT 
+            EQPMT_EVENT_TYPE_ID, TRNII_EVENT_CD, YARDS_EVENT_CD, IMDL_EVENT_CD, TRAIN_EVENT_CD,
+            MTP_CAR_EVENT_CD, FSTWY_EVENT_CD, BAD_ORDER_EVENT_CD, SMS_EVENT_CD, AEI_EVENT_CD,
+            DSCRPT_TEXT, CREATE_USER_ID, UPDATE_USER_ID, RECORD_CREATE_TMS, RECORD_UPDATE_TMS,
+            LMS_EVENT_CD, EVENT_ACTIVE_IND, EVENT_TYPE_CD, AAR_STNDRD_EVENT_CD, EDI_EVENT_CD,
+            EDI_EVENT_CD_QLFR, YARD_TRACK_MVMNT_EVENT_CD, SNW_OPERATION_TYPE, SNW_OPERATION_OWNER, SNW_LAST_REPLICATED,
+            CDC_ACTION,
+            CDC_IS_UPDATE,
+            ROW_ID,
+            :v_batch_id AS BATCH_ID
+        FROM _CDC_STAGING_EQPMV_EQPMT_EVENT_TYPE
+    ) AS src
+    ON tgt.EQPMT_EVENT_TYPE_ID = src.EQPMT_EVENT_TYPE_ID
+    
+    WHEN MATCHED AND src.CDC_ACTION = 'INSERT' AND src.CDC_IS_UPDATE = TRUE THEN 
+        UPDATE SET
+            tgt.TRNII_EVENT_CD = src.TRNII_EVENT_CD,
+            tgt.YARDS_EVENT_CD = src.YARDS_EVENT_CD,
+            tgt.IMDL_EVENT_CD = src.IMDL_EVENT_CD,
+            tgt.TRAIN_EVENT_CD = src.TRAIN_EVENT_CD,
+            tgt.MTP_CAR_EVENT_CD = src.MTP_CAR_EVENT_CD,
+            tgt.FSTWY_EVENT_CD = src.FSTWY_EVENT_CD,
+            tgt.BAD_ORDER_EVENT_CD = src.BAD_ORDER_EVENT_CD,
+            tgt.SMS_EVENT_CD = src.SMS_EVENT_CD,
+            tgt.AEI_EVENT_CD = src.AEI_EVENT_CD,
+            tgt.DSCRPT_TEXT = src.DSCRPT_TEXT,
+            tgt.CREATE_USER_ID = src.CREATE_USER_ID,
+            tgt.UPDATE_USER_ID = src.UPDATE_USER_ID,
+            tgt.RECORD_CREATE_TMS = src.RECORD_CREATE_TMS,
+            tgt.RECORD_UPDATE_TMS = src.RECORD_UPDATE_TMS,
+            tgt.LMS_EVENT_CD = src.LMS_EVENT_CD,
+            tgt.EVENT_ACTIVE_IND = src.EVENT_ACTIVE_IND,
+            tgt.EVENT_TYPE_CD = src.EVENT_TYPE_CD,
+            tgt.AAR_STNDRD_EVENT_CD = src.AAR_STNDRD_EVENT_CD,
+            tgt.EDI_EVENT_CD = src.EDI_EVENT_CD,
+            tgt.EDI_EVENT_CD_QLFR = src.EDI_EVENT_CD_QLFR,
+            tgt.YARD_TRACK_MVMNT_EVENT_CD = src.YARD_TRACK_MVMNT_EVENT_CD,
+            tgt.SNW_OPERATION_TYPE = src.SNW_OPERATION_TYPE,
+            tgt.SNW_OPERATION_OWNER = src.SNW_OPERATION_OWNER,
+            tgt.SNW_LAST_REPLICATED = src.SNW_LAST_REPLICATED,
+            tgt.CDC_OPERATION = 'UPDATE',
+            tgt.CDC_TIMESTAMP = CURRENT_TIMESTAMP(),
+            tgt.IS_DELETED = FALSE,
+            tgt.RECORD_UPDATED_AT = CURRENT_TIMESTAMP(),
+            tgt.SOURCE_LOAD_BATCH_ID = src.BATCH_ID
+    
+    WHEN MATCHED AND src.CDC_ACTION = 'DELETE' AND src.CDC_IS_UPDATE = FALSE THEN 
+        UPDATE SET
+            tgt.CDC_OPERATION = 'DELETE',
+            tgt.CDC_TIMESTAMP = CURRENT_TIMESTAMP(),
+            tgt.IS_DELETED = TRUE,
+            tgt.RECORD_UPDATED_AT = CURRENT_TIMESTAMP(),
+            tgt.SOURCE_LOAD_BATCH_ID = src.BATCH_ID
+    
+    WHEN MATCHED AND src.CDC_ACTION = 'INSERT' AND src.CDC_IS_UPDATE = FALSE THEN
+        UPDATE SET
+            tgt.TRNII_EVENT_CD = src.TRNII_EVENT_CD,
+            tgt.YARDS_EVENT_CD = src.YARDS_EVENT_CD,
+            tgt.IMDL_EVENT_CD = src.IMDL_EVENT_CD,
+            tgt.TRAIN_EVENT_CD = src.TRAIN_EVENT_CD,
+            tgt.MTP_CAR_EVENT_CD = src.MTP_CAR_EVENT_CD,
+            tgt.FSTWY_EVENT_CD = src.FSTWY_EVENT_CD,
+            tgt.BAD_ORDER_EVENT_CD = src.BAD_ORDER_EVENT_CD,
+            tgt.SMS_EVENT_CD = src.SMS_EVENT_CD,
+            tgt.AEI_EVENT_CD = src.AEI_EVENT_CD,
+            tgt.DSCRPT_TEXT = src.DSCRPT_TEXT,
+            tgt.CREATE_USER_ID = src.CREATE_USER_ID,
+            tgt.UPDATE_USER_ID = src.UPDATE_USER_ID,
+            tgt.RECORD_CREATE_TMS = src.RECORD_CREATE_TMS,
+            tgt.RECORD_UPDATE_TMS = src.RECORD_UPDATE_TMS,
+            tgt.LMS_EVENT_CD = src.LMS_EVENT_CD,
+            tgt.EVENT_ACTIVE_IND = src.EVENT_ACTIVE_IND,
+            tgt.EVENT_TYPE_CD = src.EVENT_TYPE_CD,
+            tgt.AAR_STNDRD_EVENT_CD = src.AAR_STNDRD_EVENT_CD,
+            tgt.EDI_EVENT_CD = src.EDI_EVENT_CD,
+            tgt.EDI_EVENT_CD_QLFR = src.EDI_EVENT_CD_QLFR,
+            tgt.YARD_TRACK_MVMNT_EVENT_CD = src.YARD_TRACK_MVMNT_EVENT_CD,
+            tgt.SNW_OPERATION_TYPE = src.SNW_OPERATION_TYPE,
+            tgt.SNW_OPERATION_OWNER = src.SNW_OPERATION_OWNER,
+            tgt.SNW_LAST_REPLICATED = src.SNW_LAST_REPLICATED,
+            tgt.CDC_OPERATION = 'INSERT',
+            tgt.CDC_TIMESTAMP = CURRENT_TIMESTAMP(),
+            tgt.IS_DELETED = FALSE,
+            tgt.RECORD_UPDATED_AT = CURRENT_TIMESTAMP(),
+            tgt.SOURCE_LOAD_BATCH_ID = src.BATCH_ID
+    
+    WHEN NOT MATCHED AND src.CDC_ACTION = 'INSERT' THEN 
+        INSERT (
+            EQPMT_EVENT_TYPE_ID, TRNII_EVENT_CD, YARDS_EVENT_CD, IMDL_EVENT_CD, TRAIN_EVENT_CD,
+            MTP_CAR_EVENT_CD, FSTWY_EVENT_CD, BAD_ORDER_EVENT_CD, SMS_EVENT_CD, AEI_EVENT_CD,
+            DSCRPT_TEXT, CREATE_USER_ID, UPDATE_USER_ID, RECORD_CREATE_TMS, RECORD_UPDATE_TMS,
+            LMS_EVENT_CD, EVENT_ACTIVE_IND, EVENT_TYPE_CD, AAR_STNDRD_EVENT_CD, EDI_EVENT_CD,
+            EDI_EVENT_CD_QLFR, YARD_TRACK_MVMNT_EVENT_CD, SNW_OPERATION_TYPE, SNW_OPERATION_OWNER, SNW_LAST_REPLICATED,
+            CDC_OPERATION, CDC_TIMESTAMP, IS_DELETED, RECORD_CREATED_AT, RECORD_UPDATED_AT, SOURCE_LOAD_BATCH_ID
+        ) VALUES (
+            src.EQPMT_EVENT_TYPE_ID, src.TRNII_EVENT_CD, src.YARDS_EVENT_CD, src.IMDL_EVENT_CD, src.TRAIN_EVENT_CD,
+            src.MTP_CAR_EVENT_CD, src.FSTWY_EVENT_CD, src.BAD_ORDER_EVENT_CD, src.SMS_EVENT_CD, src.AEI_EVENT_CD,
+            src.DSCRPT_TEXT, src.CREATE_USER_ID, src.UPDATE_USER_ID, src.RECORD_CREATE_TMS, src.RECORD_UPDATE_TMS,
+            src.LMS_EVENT_CD, src.EVENT_ACTIVE_IND, src.EVENT_TYPE_CD, src.AAR_STNDRD_EVENT_CD, src.EDI_EVENT_CD,
+            src.EDI_EVENT_CD_QLFR, src.YARD_TRACK_MVMNT_EVENT_CD, src.SNW_OPERATION_TYPE, src.SNW_OPERATION_OWNER, src.SNW_LAST_REPLICATED,
+            'INSERT', CURRENT_TIMESTAMP(), FALSE, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP(), src.BATCH_ID
+        );
+    
+    v_rows_merged := SQLROWCOUNT;
+    v_end_time := CURRENT_TIMESTAMP();
+    
+    DROP TABLE IF EXISTS _CDC_STAGING_EQPMV_EQPMT_EVENT_TYPE;
+    
+    -- =========================================================================
+    -- EXECUTION LOGGING: Write metrics to CDC_EXECUTION_LOG
+    -- =========================================================================
+    INSERT INTO D_BRONZE.MONITORING.CDC_EXECUTION_LOG (
+        TABLE_NAME, BATCH_ID, EXECUTION_STATUS, START_TIME, END_TIME,
+        ROWS_PROCESSED, ROWS_INSERTED, ROWS_UPDATED, ROWS_DELETED,
+        ERROR_MESSAGE, CREATED_AT
+    ) VALUES (
+        'EQPMV_EQPMT_EVENT_TYPE', :v_batch_id, 'SUCCESS', :v_start_time, :v_end_time,
+        :v_rows_merged, :v_rows_inserted, :v_rows_updated, :v_rows_deleted,
+        NULL, CURRENT_TIMESTAMP()
+    );
+    
+    RETURN 'SUCCESS: Processed ' || v_rows_merged || ' CDC changes (I:' || v_rows_inserted || 
+           ' U:' || v_rows_updated || ' D:' || v_rows_deleted || '). Batch: ' || v_batch_id;
+    
+EXCEPTION
+    WHEN OTHER THEN
+        v_end_time := CURRENT_TIMESTAMP();
+        v_error_msg := SQLERRM;
+        
+        DROP TABLE IF EXISTS _CDC_STAGING_EQPMV_EQPMT_EVENT_TYPE;
+        
+        INSERT INTO D_BRONZE.MONITORING.CDC_EXECUTION_LOG (
+            TABLE_NAME, BATCH_ID, EXECUTION_STATUS, START_TIME, END_TIME,
+            ROWS_PROCESSED, ROWS_INSERTED, ROWS_UPDATED, ROWS_DELETED,
+            ERROR_MESSAGE, CREATED_AT
+        ) VALUES (
+            'EQPMV_EQPMT_EVENT_TYPE', :v_batch_id, 'ERROR', :v_start_time, :v_end_time,
+            0, 0, 0, 0,
+            :v_error_msg, CURRENT_TIMESTAMP()
+        );
+        
+        RETURN 'ERROR: ' || v_error_msg || ' at ' || CURRENT_TIMESTAMP()::VARCHAR;
+END;
+$$;
+
+-- =============================================================================
+-- STEP 5: Create Scheduled Task to Process CDC Data
+-- =============================================================================
+CREATE OR REPLACE TASK D_RAW.SADB.TASK_PROCESS_EQPMV_EQPMT_EVENT_TYPE
+    WAREHOUSE = INFA_INGEST_WH
+    SCHEDULE = '5 MINUTE'
+    ALLOW_OVERLAPPING_EXECUTION = FALSE
+    COMMENT = 'Task to process EQPMV_EQPMT_EVENT_TYPE_BASE CDC changes into data preservation table (v1 - enhanced logging)'
+AS
+    CALL D_RAW.SADB.SP_PROCESS_EQPMV_EQPMT_EVENT_TYPE();
+
+ALTER TASK D_RAW.SADB.TASK_PROCESS_EQPMV_EQPMT_EVENT_TYPE RESUME;
+
+-- =============================================================================
+-- PREREQUISITE: Ensure monitoring table exists (run once before first execution)
+-- =============================================================================
+/*
+CREATE TABLE IF NOT EXISTS D_BRONZE.MONITORING.CDC_EXECUTION_LOG (
+    LOG_ID NUMBER AUTOINCREMENT PRIMARY KEY,
+    TABLE_NAME VARCHAR(256) NOT NULL,
+    BATCH_ID VARCHAR(100) NOT NULL,
+    EXECUTION_STATUS VARCHAR(20) NOT NULL,
+    START_TIME TIMESTAMP_NTZ,
+    END_TIME TIMESTAMP_NTZ,
+    ROWS_PROCESSED NUMBER DEFAULT 0,
+    ROWS_INSERTED NUMBER DEFAULT 0,
+    ROWS_UPDATED NUMBER DEFAULT 0,
+    ROWS_DELETED NUMBER DEFAULT 0,
+    ERROR_MESSAGE VARCHAR(4000),
+    CREATED_AT TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+);
+*/
+
+-- =============================================================================
+-- VERIFICATION QUERIES
+-- =============================================================================
+-- SHOW TABLES LIKE 'EQPMV_EQPMT_EVENT_TYPE%' IN SCHEMA D_BRONZE.SADB;
+-- SHOW STREAMS LIKE 'EQPMV_EQPMT_EVENT_TYPE%' IN SCHEMA D_RAW.SADB;
+-- SHOW TASKS LIKE 'TASK_PROCESS_EQPMV_EQPMT_EVENT_TYPE%' IN SCHEMA D_RAW.SADB;
+-- CALL D_RAW.SADB.SP_PROCESS_EQPMV_EQPMT_EVENT_TYPE();
+-- SELECT * FROM D_BRONZE.MONITORING.CDC_EXECUTION_LOG WHERE TABLE_NAME = 'EQPMV_EQPMT_EVENT_TYPE' ORDER BY CREATED_AT DESC LIMIT 10;
