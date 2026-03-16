@@ -72,3 +72,14 @@ WH:
 │  File Format       │  FF_{TYPE}_{PURPOSE}                                   │
 │  Sequence          │  SEQ_{ENTITY}_{COLUMN}                                 │
 │  UDF               │  UDF_{ACTION}_{SUBJECT}  
+
+
++ read -r file
++ echo 'DEV running: sql/10_tables/01_customers.sql'
++ snow sql -x --role D-SNW-DEVBI1-ETL --warehouse INFA_INGEST_WH --database D_RAW -f sql/10_tables/01_customers.sql
+DEV running: sql/10_tables/01_customers.sql
+╭─ Error ──────────────────────────────────────────────────────────────────────╮
+│ Use either query, filename or input option.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ 
+##[error]Bash exited with code '1'.
