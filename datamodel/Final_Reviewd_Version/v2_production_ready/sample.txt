@@ -1,0 +1,74 @@
+{ENTITY} 
+(ENTITY}_TMP
+{ENTITY}_BKP_YYYYMMDD
+FACT_{SUBJECT} 
+DIM_{SUBJECT} 
+AGG_{SUBJECT} 
+
+DT_{ENTITY}_{PURPOSE}
+
+DT_CUSTOMER_CURRENT
+DT_ORDER_DAILY_AGG
+DT_INVENTORY_REALTIME
+DT_SALES_MTD
+
+Views :
+
+VW_CUSTOMER_ORDERS
+VW_SEC_{ENTITY}
+MVW_{ENTITY}
+VW_RPT_{SUBJECT}
+VW_API_{ENDPOINT} 
+
+
+SP_{ACTION}_{ENTITY}
+
+
+
+SP_PROCESS_ 
+SP_LOAD_
+SP_VALIDATE_ 
+SP_PURGE_ 
+SP_REFRESH_    
+SP_CALC_       
+SP_NOTIFY_
+
+TASK_{ACTION}_{ENTITY} 
+
+TASK_PROCESS_
+TASK_ARCHIVE_
+TASK_NOTIFY_
+
+
+{SOURCE_TABLE}_STREAM  or  {SOURCE_TABLE}_HIST_STREAM 
+
+TRAIN_OPTRN_EVENT_BASE_HIST_STREAM
+CUSTOMER_STREAM
+ORDER_CDC_STREAM 
+
+WH:
+
+{PURPOSE}_{SIZE}_WH  or  {TEAM}_{PURPOSE}_WH
+
+
+
+
+│  Object Type       │  Pattern                                               │
+├────────────────────┼────────────────────────────────────────────────────────┤
+│  Database          │  D_{LAYER}                                             │
+│  Schema            │  {DOMAIN} or {SOURCE}                                  │
+│  Table             │  {ENTITY} or {ENTITY}_{SUFFIX}                         │
+│  Dynamic Table     │  DT_{ENTITY}_{PURPOSE}                                 │
+│  View              │  VW_{ENTITY} or VW_SEC_{ENTITY}                        │
+│  Materialized View │  MVW_{ENTITY}                                          │
+│  Stream            │  {TABLE}_STREAM or {TABLE}_HIST_STREAM                 │
+│  Stored Procedure  │  SP_{ACTION}_{ENTITY}                                  │
+│  Task              │  TASK_{ACTION}_{ENTITY}                                │
+│  Warehouse         │  {PURPOSE}_{SIZE}_WH                                   │
+│  Functional Role   │  FR_{FUNCTION}                                         │
+│  Access Role       │  AR_{SCOPE}_{PERMISSION}                               │
+│  Service Role      │  SR_{SERVICE}                                          │
+│  Stage             │  STG_{PURPOSE} or {ENTITY}_STAGE                       │
+│  File Format       │  FF_{TYPE}_{PURPOSE}                                   │
+│  Sequence          │  SEQ_{ENTITY}_{COLUMN}                                 │
+│  UDF               │  UDF_{ACTION}_{SUBJECT}  
