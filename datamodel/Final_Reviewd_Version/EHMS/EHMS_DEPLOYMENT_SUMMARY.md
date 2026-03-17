@@ -1,0 +1,126 @@
+# EHMS CDC Deployment Planning — Consolidated Metadata Summary
+**Date:** March 17, 2026  
+**Schema:** D_RAW.EHMS → D_BRONZE.EHMS  
+**Total Scripts:** 7  
+**Total Source Columns:** 399  
+**Total Rows:** 403,638,895  
+**Filter:** NONE (no purge filter for EHMS)
+
+---
+
+## 1. Script Inventory
+
+| # | Script | Source Table | PK | Src Cols | Tgt Cols | Row Count | Compiled |
+|---|--------|-------------|-----|----------|----------|-----------|----------|
+| 1 | EHMSAPP_DTQ_DTCTD_EQPMNT.sql | EHMSAPP_DTQ_DTCTD_EQPMNT_BASE | DTCTD_EQPMNT_ID | 49 | 55 | 39,332,284 | PASS |
+| 2 | EHMSAPP_DTQ_DTCTD_EQPMNT_CMPNT.sql | EHMSAPP_DTQ_DTCTD_EQPMNT_CMPNT_BASE | DTCTD_EQPMNT_CMPNT_ID | 128 | 134 | 351,345,674 | PASS |
+| 3 | EHMSAPP_DTQ_DTCTD_TRAIN.sql | EHMSAPP_DTQ_DTCTD_TRAIN_BASE | DTCTD_TRAIN_ID | 73 | 79 | 423,250 | PASS |
+| 4 | EHMSAPP_DTQ_EQPMNT.sql | EHMSAPP_DTQ_EQPMNT_BASE | EQPMNT_ID | 16 | 22 | 1,512,127 | PASS |
+| 5 | EHMSAPP_DTQ_PSNG_SMRY.sql | EHMSAPP_DTQ_PSNG_SMRY_BASE | PSNG_SMRY_ID | 27 | 33 | 11,017,724 | PASS |
+| 6 | EHMSAPP_DTQ_WYSD_DEVICE_CMPNT.sql | EHMSAPP_DTQ_WYSD_DEVICE_CMPNT_BASE | WYSD_DEVICE_CMPNT_VRSN_ID | 21 | 27 | 3,522 | PASS |
+| 7 | EHMSAPP_DTQ_WYSD_DTCTN_DEVICE.sql | EHMSAPP_DTQ_WYSD_DTCTN_DEVICE_BASE | WYSD_DTCTN_DEVICE_VRSN_ID | 35 | 41 | 4,314 | PASS |
+
+---
+
+## 2. Recommended Deployment Order (Smallest → Largest)
+
+| Phase | Script | Rows | Est. Load Time | Warehouse |
+|-------|--------|------|----------------|-----------|
+| 1 | EHMSAPP_DTQ_WYSD_DEVICE_CMPNT | 3,522 | < 1 min | INFA_INGEST_WH |
+| 2 | EHMSAPP_DTQ_WYSD_DTCTN_DEVICE | 4,314 | < 1 min | INFA_INGEST_WH |
+| 3 | EHMSAPP_DTQ_DTCTD_TRAIN | 423,250 | ~1 min | INFA_INGEST_WH |
+| 4 | EHMSAPP_DTQ_EQPMNT | 1,512,127 | ~2 min | INFA_INGEST_WH |
+| 5 | EHMSAPP_DTQ_PSNG_SMRY | 11,017,724 | ~5 min | INFA_INGEST_WH |
+| 6 | EHMSAPP_DTQ_DTCTD_EQPMNT | 39,332,284 | ~15 min | INFA_INGEST_WH |
+| 7 | EHMSAPP_DTQ_DTCTD_EQPMNT_CMPNT | 351,345,674 | ~30-60 min | **Consider LARGE WH** |
+
+---
+
+## 3. Key Differences from SADB Pattern
+
+| Aspect | SADB Scripts | EHMS Scripts |
+|--------|-------------|-------------|
+| Schema | D_RAW.SADB / D_BRONZE.SADB | D_RAW.EHMS / D_BRONZE.EHMS |
+| Purge Filter | `NVL(SNW_OPERATION_OWNER,'') NOT IN ('TSDPRG','EMEPRG')` | **NONE** |
+| Execution Logging | D_BRONZE.MONITORING.CDC_EXECUTION_LOG | Same |
+| Staleness Detection | SELECT COUNT(*) WHERE 1=0 | Same |
+| Task Schedule | 5 MINUTE | Same |
+| Warehouse | INFA_INGEST_WH | Same |
+
+---
+
+## 4. Volume Comparison
+
+```
+EHMSAPP_DTQ_DTCTD_EQPMNT_CMPNT  ████████████████████████████████████  351.3M (87.0%)
+EHMSAPP_DTQ_DTCTD_EQPMNT        █████                                 39.3M  (9.7%)
+EHMSAPP_DTQ_PSNG_SMRY            █                                     11.0M  (2.7%)
+EHMSAPP_DTQ_EQPMNT               ▏                                      1.5M  (0.4%)
+EHMSAPP_DTQ_DTCTD_TRAIN          ▏                                      0.4M  (0.1%)
+EHMSAPP_DTQ_WYSD_DTCTN_DEVICE    ▏                                      4.3K  (0.0%)
+EHMSAPP_DTQ_WYSD_DEVICE_CMPNT    ▏                                      3.5K  (0.0%)
+                                                              Total: 403.6M rows
+```
+
+---
+
+## 5. Pre-Deployment Checklist
+
+- [ ] Verify `D_BRONZE.EHMS` schema exists
+- [ ] Verify `D_BRONZE.MONITORING.CDC_EXECUTION_LOG` table exists
+- [ ] Deploy scripts in Phase 1-7 order above
+- [ ] After each script: verify task created and RESUMED
+- [ ] After Phase 7: run validation count query (below)
+- [ ] Monitor CDC_EXECUTION_LOG for first 24 hours
+
+---
+
+## 6. Post-Deployment Validation Query
+
+```sql
+SELECT 'EHMSAPP_DTQ_DTCTD_EQPMNT' AS TBL,
+       (SELECT COUNT(*) FROM D_RAW.EHMS.EHMSAPP_DTQ_DTCTD_EQPMNT_BASE) AS SOURCE,
+       (SELECT COUNT(*) FROM D_RAW.EHMS.EHMSAPP_DTQ_DTCTD_EQPMNT_BASE_HIST_STREAM) AS STREAM,
+       (SELECT COUNT(*) FROM D_BRONZE.EHMS.EHMSAPP_DTQ_DTCTD_EQPMNT) AS TARGET
+UNION ALL SELECT 'EHMSAPP_DTQ_DTCTD_EQPMNT_CMPNT',
+       (SELECT COUNT(*) FROM D_RAW.EHMS.EHMSAPP_DTQ_DTCTD_EQPMNT_CMPNT_BASE),
+       (SELECT COUNT(*) FROM D_RAW.EHMS.EHMSAPP_DTQ_DTCTD_EQPMNT_CMPNT_BASE_HIST_STREAM),
+       (SELECT COUNT(*) FROM D_BRONZE.EHMS.EHMSAPP_DTQ_DTCTD_EQPMNT_CMPNT)
+UNION ALL SELECT 'EHMSAPP_DTQ_DTCTD_TRAIN',
+       (SELECT COUNT(*) FROM D_RAW.EHMS.EHMSAPP_DTQ_DTCTD_TRAIN_BASE),
+       (SELECT COUNT(*) FROM D_RAW.EHMS.EHMSAPP_DTQ_DTCTD_TRAIN_BASE_HIST_STREAM),
+       (SELECT COUNT(*) FROM D_BRONZE.EHMS.EHMSAPP_DTQ_DTCTD_TRAIN)
+UNION ALL SELECT 'EHMSAPP_DTQ_EQPMNT',
+       (SELECT COUNT(*) FROM D_RAW.EHMS.EHMSAPP_DTQ_EQPMNT_BASE),
+       (SELECT COUNT(*) FROM D_RAW.EHMS.EHMSAPP_DTQ_EQPMNT_BASE_HIST_STREAM),
+       (SELECT COUNT(*) FROM D_BRONZE.EHMS.EHMSAPP_DTQ_EQPMNT)
+UNION ALL SELECT 'EHMSAPP_DTQ_PSNG_SMRY',
+       (SELECT COUNT(*) FROM D_RAW.EHMS.EHMSAPP_DTQ_PSNG_SMRY_BASE),
+       (SELECT COUNT(*) FROM D_RAW.EHMS.EHMSAPP_DTQ_PSNG_SMRY_BASE_HIST_STREAM),
+       (SELECT COUNT(*) FROM D_BRONZE.EHMS.EHMSAPP_DTQ_PSNG_SMRY)
+UNION ALL SELECT 'EHMSAPP_DTQ_WYSD_DEVICE_CMPNT',
+       (SELECT COUNT(*) FROM D_RAW.EHMS.EHMSAPP_DTQ_WYSD_DEVICE_CMPNT_BASE),
+       (SELECT COUNT(*) FROM D_RAW.EHMS.EHMSAPP_DTQ_WYSD_DEVICE_CMPNT_BASE_HIST_STREAM),
+       (SELECT COUNT(*) FROM D_BRONZE.EHMS.EHMSAPP_DTQ_WYSD_DEVICE_CMPNT)
+UNION ALL SELECT 'EHMSAPP_DTQ_WYSD_DTCTN_DEVICE',
+       (SELECT COUNT(*) FROM D_RAW.EHMS.EHMSAPP_DTQ_WYSD_DTCTN_DEVICE_BASE),
+       (SELECT COUNT(*) FROM D_RAW.EHMS.EHMSAPP_DTQ_WYSD_DTCTN_DEVICE_BASE_HIST_STREAM),
+       (SELECT COUNT(*) FROM D_BRONZE.EHMS.EHMSAPP_DTQ_WYSD_DTCTN_DEVICE)
+ORDER BY 1;
+```
+
+---
+
+## 7. Monitoring Query (Post-Deploy)
+
+```sql
+SELECT TABLE_NAME, EXECUTION_STATUS, COUNT(*) AS EXECUTIONS,
+       SUM(ROWS_PROCESSED) AS TOTAL_ROWS,
+       MIN(START_TIME) AS FIRST_RUN,
+       MAX(END_TIME) AS LAST_RUN
+FROM D_BRONZE.MONITORING.CDC_EXECUTION_LOG
+WHERE TABLE_NAME LIKE 'EHMSAPP_DTQ%'
+  AND CREATED_AT >= DATEADD('DAY', -1, CURRENT_TIMESTAMP())
+GROUP BY 1, 2
+ORDER BY 1, 2;
+```
