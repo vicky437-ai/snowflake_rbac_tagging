@@ -1,0 +1,95 @@
+
+This is an excellent question. Let me analyze the exact scenario where duplicates can appear in the bronze table by tracing the data flow end-to-end.
+
+The Root Cause: Where Duplicates Come From
+text
+Oracle (Source of Truth)     IDMC CDC Streaming        D_RAW._BASE           Stream          D_BRONZE (Target)
+┌──────────────┐          ┌──────────────────┐      ┌─────────────┐      ┌─────────┐      ┌──────────────┐
+│ PK enforced  │──CDC──>  │ MERGE every 1min │──>   │ NO PK       │──>   │ Stream  │──>   │ MERGE on PK  │
+│ unique rows  │          │ into _BASE       │      │ ENFORCED    │      │ 5 min   │      │ (our SP)     │
+└──────────────┘          └──────────────────┘      └─────────────┘      └─────────┘      └──────────────┘
+                                                         ▲
+                                                         │
+                                                    THIS IS THE
+                                                    PROBLEM ZONE
+The _BASE table in Snowflake does NOT enforce PK uniqueness. Snowflake's PRIMARY KEY constraint is informational only — it does NOT prevent duplicate inserts. So if IDMC's streaming job inserts instead of merging, or if a race condition occurs between two IDMC micro-batches, the _BASE table can have duplicate DTCTD_EQPMNT_IDs.
+
+Scenario 1: IDMC INSERT Race Condition
+text
+T=0:00  IDMC batch 1: INSERT ID=1001 (speed=45) into _BASE
+T=0:30  IDMC batch 2: INSERT ID=1001 (speed=60) into _BASE  ← DUPLICATE!
+T=5:00  Our SP runs: Stream sees TWO rows with ID=1001, both as INSERT
+Scenario 2: IDMC Merge Failure / Fallback to INSERT
+text
+IDMC MERGE fails → falls back to INSERT ALL
+_BASE now has 2 rows for same DTCTD_EQPMNT_ID
+Scenario 3: Source Table DROP+RECREATE + IDMC Reload
+text
+IDMC reloads all data after DDL event
+If _BASE already had rows, and IDMC does INSERT (not MERGE), duplicates appear
+What Happens in Our SP With Duplicates in _BASE
+When the stream contains two INSERT records for the same PK:
+
+sql
+-- Stream produces:
+-- Row A: ID=1001, speed=45, METADATA$ACTION='INSERT', METADATA$ISUPDATE=FALSE
+-- Row B: ID=1001, speed=60, METADATA$ACTION='INSERT', METADATA$ISUPDATE=FALSE
+
+-- Our MERGE:
+MERGE INTO bronze AS tgt
+USING staging AS src ON tgt.ID = src.ID
+WHEN NOT MATCHED AND src.CDC_ACTION='INSERT' THEN INSERT ...
+Snowflake MERGE behavior with duplicate keys in source: Snowflake will either:
+
+Insert one, ignore the other (non-deterministic which one wins)
+Error out with "Duplicate row detected during DML action" if both try to match NOT MATCHED in the same statement
+The result: non-deterministic data or runtime error — both are bad.
+
+The 5-Minute Schedule Question
+The 5-minute schedule is fine. The problem isn't timing — it's that the _BASE table allows duplicates because Snowflake PKs are not enforced. Whether you run every 1 minute or 60 minutes, if _BASE has duplicates, the stream will surface them.
+
+How to Handle: Three Options
+Option 1: Deduplicate in the Staging CTAS (Recommended)
+The simplest fix — add QUALIFY ROW_NUMBER() to the staging CTAS to keep only the latest row per PK:
+
+sql
+CREATE OR REPLACE TEMPORARY TABLE _CDC_STAGING_DTQ_DTCTD_EQPMNT AS
+SELECT *
+FROM (
+    SELECT
+        DTCTD_EQPMNT_ID, ..., 
+        METADATA$ACTION AS CDC_ACTION,
+        METADATA$ISUPDATE AS CDC_IS_UPDATE,
+        METADATA$ROW_ID AS ROW_ID,
+        ROW_NUMBER() OVER (
+            PARTITION BY DTCTD_EQPMNT_ID 
+            ORDER BY SNW_LAST_REPLICATED DESC NULLS LAST
+        ) AS RN
+    FROM D_RAW.EHMS.DTQ_DTCTD_EQPMNT_BASE_HIST_STREAM
+)
+WHERE RN = 1;
+This ensures only one row per PK enters the MERGE, eliminating the duplicate source problem entirely.
+
+Option 2: Fix at IDMC Layer (Source Fix)
+Ensure IDMC always uses MERGE (not INSERT) into _BASE. This prevents duplicates from entering the raw layer in the first place. But this depends on the IDMC team — not in our control.
+
+Option 3: Add a Pre-MERGE Dedup Check + Log (Defensive)
+Keep the current MERGE but add a dedup count to the pre-merge metrics and log it:
+
+sql
+SELECT COUNT(*) - COUNT(DISTINCT DTCTD_EQPMNT_ID) AS DUPLICATE_COUNT
+FROM _CDC_STAGING_DTQ_DTCTD_EQPMNT
+WHERE CDC_ACTION = 'INSERT';
+If duplicates are detected, log it as a warning but still process (using Option 1's dedup).
+
+My Recommendation
+Option 1 (dedup in staging CTAS) is the right fix. It's:
+
+Self-contained (no dependency on IDMC team)
+Non-breaking (same MERGE logic, just cleaner input)
+Auditable (you can log the dedup count before discarding)
+Zero performance impact (ROW_NUMBER is cheap)
+The 5-minute schedule is fine — the issue is not timing, it's data quality at the _BASE layer. The dedup in staging protects the bronze layer regardless of what happens upstream.
+
+Why the Customer Is Seeing Duplicates Now
+Most likely: IDMC is doing INSERT (not MERGE) into _BASE during certain operations (initial load, error recovery, or high-volume batches). The SHOW_INITIAL_ROWS=TRUE stream then surfaces all these rows as INSERT actions. When two rows with the same PK hit the MERGE's NOT MATCHED clause in the same batch, Snowflake either picks one non-deterministically or errors. If it picks one, the next SP run sees the other duplicate still in the stream — and since the PK now exists in bronze, it hits the MATCHED + INSERT + IS_UPDATE=FALSE clause (duplicate resolution in v1, or CDC_OPERATION='INSERT' in production), resulting in an unnecessary update that could overwrite with older data.
