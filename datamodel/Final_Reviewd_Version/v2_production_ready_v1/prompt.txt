@@ -1,0 +1,61 @@
+Prompt for Coco:
+
+I need you to apply the enhanced exception handling + deduplication pattern from my template script to the remaining 21 CDC pipeline table scripts.
+
+Template Reference Script: /cpkc/DTQ_DTCTD_EQPMNT_v1_FINAL.sql — This is the final validated template with 9 layers of exception handling + dedup. Use this as the exact pattern to follow.
+
+What to apply to each of the 21 remaining table scripts:
+
+Stale stream detection: Replace WHEN OTHER with WHEN STATEMENT_ERROR + specific error matching:
+
+sql
+IF (v_error_msg ILIKE '%invalid%' OR v_error_msg ILIKE '%stale%' 
+    OR v_error_msg ILIKE '%dropped%' OR v_error_msg ILIKE '%does not exist%' 
+    OR v_sqlcode_captured IN (2000, 2003, 2043, 91901, 2151)) THEN
+    v_stream_stale := TRUE;
+ELSE
+    RAISE;
+END IF;
+Base table validation before recovery: Add SELECT COUNT(*) FROM _BASE LIMIT 1 inside BEGIN...EXCEPTION before stream recreation. If fails → log RECOVERY_FAILED and RETURN.
+
+Deduplication in RECOVERY mode staging CTAS:
+
+sql
+ROW_NUMBER() OVER (
+    PARTITION BY {PK_COLUMNS}
+    ORDER BY SNW_LAST_REPLICATED DESC NULLS LAST
+) AS DEDUP_RN
+...
+WHERE {each_PK_column} IS NOT NULL
+Deduplication in NORMAL mode staging CTAS:
+
+sql
+ROW_NUMBER() OVER (
+    PARTITION BY {PK_COLUMNS}, METADATA$ACTION, METADATA$ISUPDATE
+    ORDER BY SNW_LAST_REPLICATED DESC NULLS LAST, METADATA$ROW_ID DESC
+) AS DEDUP_RN
+...
+WHERE {each_PK_column} IS NOT NULL
+NULL PK filter: Add WHERE {PK} IS NOT NULL in both recovery and normal staging CTAS. For composite PKs (like TRAIN_CNST_DTL_RAIL_EQPT with 3 PK columns), filter ALL PK columns: WHERE col1 IS NOT NULL AND col2 IS NOT NULL AND col3 IS NOT NULL
+
+Nested exception handlers: Replace single WHEN OTHER at bottom with separate WHEN STATEMENT_ERROR + WHEN OTHER, each with nested BEGIN...EXCEPTION WHEN OTHER THEN NULL protecting the logging INSERT.
+
+Monitoring auto-creation: Add CREATE TABLE IF NOT EXISTS D_BRONZE.MONITORING.CDC_EXECUTION_LOG (...) at SP start.
+
+SQLCODE/SQLSTATE capture: Error messages should include (Code: || SQLCODE || ', State: ' || SQLSTATE || ')'
+
+Fix known bugs in all scripts:
+
+Change LET v_rows_merged → v_rows_merged := (LET re-declares; := assigns)
+Change INSERT INTO ... VALUES (..., OBJECT_CONSTRUCT(...)) → INSERT INTO ... SELECT ... (OBJECT_CONSTRUCT not allowed in VALUES clause)
+Change CDC_OPERATION VARCHAR(10) → VARCHAR(20) in target table DDL (if DUPLICATE_RESOLVED is used)
+Tables to modify (21): TRAIN_KIND, TRAIN_GROUP, TRAIN_GROUP_TYPE, COMMODITY, CUSTOMER, EQUIPMENT, EQUIPMENT_TYPE, INTERMODAL_CONTAINER, JUNCTION, LOCOMOTIVE, STNWYB_MSG_DN, TRAIN, TRAIN_SERVICE_PLAN, TRACK, WAYBILL, WAYBILL_LINE, CWT_RATE, CHARGE, INDUSTRY, TRAIN_SERVICE_PLAN_SCHEDULE, DTQ_DTCTD_EQPMNT_DMGE
+
+Important notes:
+
+SADB tables need purge filter: WHERE NVL(SNW_OPERATION_OWNER, '') NOT IN ('TSDPRG', 'EMEPRG') in both recovery and normal staging. EHMS tables (DTQ_DTCTD_EQPMNT_DMGE) do NOT have purge filter.
+Each table has different PK columns — check the MERGE ON clause to identify the correct PK(s) for PARTITION BY and NULL filter.
+For composite PK tables (TRAIN_CNST_DTL_RAIL_EQPT pattern): PARTITION BY all PK columns, NULL filter on all PK columns.
+Do NOT change the MERGE logic (UPDATE SET columns, 4-way MERGE clauses) — only change the staging CTAS, exception handling, and recovery path.
+Test each SP compiles after modification with CREATE OR REPLACE PROCEDURE.
+This prompt gives Coco the exact pattern, the specific code snippets, the table list, and the gotchas to watch for. They can reference the template script for the full working implementation.
