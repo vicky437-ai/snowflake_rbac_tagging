@@ -16,35 +16,50 @@
 
 ### Why Monitoring is Critical for CDC Pipelines
 
-```
- ┌────────────────┐     ┌────────────────┐     ┌────────────────┐     ┌────────────────┐
- │ Oracle         │     │ IDMC CDC       │     │ Tasks +        │     │ D_BRONZE       │
- │ EHMS / SADB    │────>│ Streams (22)   │────>│ Stored Procs   │────>│ 22 Bronze      │
- │ 22 Source      │     │                │     │ CDC Pipelines  │     │ Tables         │
- │ Tables         │     │                │     │                │     │                │
- └────────────────┘     └────────────────┘     └───────┬────────┘     └────────────────┘
-                                                       │
-                                                       ▼
-                        ┌──────────────────────────────────────────────────────┐
-                        │         Without Monitoring — What Can Go Wrong?      │
-                        │                                                      │
-                        │  ! Stream goes STALE silently — pipeline stops       │
-                        │    processing new data                               │
-                        │                                                      │
-                        │  ! Task FAILS repeatedly — no one notices for        │
-                        │    hours or days                                     │
-                        │                                                      │
-                        │  ! Source table DROP + RECREATE by IDMC — stream     │
-                        │    breaks, data stops flowing                        │
-                        │                                                      │
-                        │  ! No visibility into pipeline health — issues       │
-                        │    found by downstream users, not ops                │
-                        │                                                      │
-                        │  ! Manual checking across 22 tables is               │
-                        │    unsustainable and error-prone                     │
-                        └──────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph Source["SOURCE SYSTEM"]
+        SRC[("Oracle EHMS / SADB<br/>22 Source Tables")]
+    end
 
-                                           Current State: NO MONITORING
+    subgraph IDMC["INFORMATICA IDMC"]
+        CDC["CDC<br/>Streams (22)"]
+    end
+
+    subgraph Pipeline["SNOWFLAKE PIPELINES"]
+        PROC["Tasks + Stored Procs<br/>CDC Pipelines"]
+    end
+
+    subgraph Target["TARGET"]
+        BRONZE[("D_BRONZE<br/>22 Bronze Tables")]
+    end
+
+    subgraph NoMon["CURRENT STATE"]
+        NOMON["No Monitoring"]
+    end
+
+    SRC -->|CDC Data| CDC
+    CDC -->|Load| PROC
+    PROC -->|Merge| BRONZE
+
+    style SRC fill:#ebf5fb,stroke:#2471a3,stroke-width:2px
+    style CDC fill:#fdf2e9,stroke:#e67e22,stroke-width:2px
+    style PROC fill:#d5f5e3,stroke:#27ae60,stroke-width:2px
+    style BRONZE fill:#ebf5fb,stroke:#2471a3,stroke-width:2px
+    style NOMON fill:#fdedec,stroke:#c0392b,stroke-width:2px,color:#c0392b
+```
+
+```mermaid
+flowchart TD
+    subgraph Problem["Without Monitoring — What Can Go Wrong?"]
+        A["Stream goes **STALE** silently — pipeline stops processing new data"]
+        B["Task **FAILS** repeatedly — no one notices for hours or days"]
+        C["Source table **DROP + RECREATE** by IDMC — stream breaks, data stops flowing"]
+        D["**No visibility** into pipeline health — issues found by downstream users, not ops"]
+        E["Manual checking across 22 tables is **unsustainable** and error-prone"]
+    end
+
+    style Problem fill:#fdedec,stroke:#c0392b,stroke-width:2px
 ```
 
 ---
@@ -66,68 +81,62 @@
 
 ### Architecture Flow
 
-```
-  ┌──────────────────────────────────────────┐
-  │ CDC_PIPELINE_CONFIG (22 tables)           │   (Metadata-Driven)
-  └──────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    CONFIG["CDC_PIPELINE_CONFIG (22 tables)<br/>Metadata-Driven"]
+    TASK_TRIGGER["TASK_CDC_MONITORING_CYCLE<br/>Automated Trigger — Every 15 Minutes"]
+    ORCH["SP_RUN_MONITORING_CYCLE"]
 
-  ┌──────────────────────────────────────────────────────────────────┐
-  │          TASK_CDC_MONITORING_CYCLE                                │
-  │          Automated Trigger — Every 15 Minutes                    │
-  └──────────────────────────┬───────────────────────────────────────┘
-                             │
-                             ▼
-              ┌──────────────────────────────────┐
-              │     SP_RUN_MONITORING_CYCLE       │
-              └──────┬──────────┬────────────┬───┘
-                     │          │            │
-           Step 1    │  Step 2  │   Step 3   │
-                     ▼          ▼            ▼
-  ┌──────────────────────┐ ┌──────────────────────┐ ┌──────────────────────┐
-  │   Stream Health      │ │   Task Health        │ │   Alert Generation   │
-  │   Check              │ │   Check              │ │                      │
-  │                      │ │                      │ │   3 alert types with │
-  │ SHOW STREAMS +       │ │ INFORMATION_SCHEMA   │ │   severity levels    │
-  │ RESULT_SCAN          │ │ .TASK_HISTORY()      │ │                      │
-  │                      │ │                      │ │   Built-in dedup     │
-  │ Stale detection +    │ │ Real-time (0 latency)│ │   (1hr / 4hr)        │
-  │ staleness countdown  │ │ task status          │ │                      │
-  │                      │ │                      │ │   Prevents alert     │
-  │ Covers: D_RAW.SADB   │ │ Last run, duration,  │ │   flooding           │
-  │ + D_RAW.EHMS         │ │ success/failure      │ │                      │
-  └──────────┬───────────┘ └──────────┬───────────┘ └──────────┬───────────┘
-             │                        │                        │
-             ▼                        ▼                        ▼
-  ┌──────────────────────┐ ┌──────────────────────┐ ┌──────────────────────┐
-  │ CDC_STREAM_HEALTH    │ │ CDC_TASK_HEALTH      │ │ CDC_ALERT_LOG        │
-  │ _SNAPSHOT            │ │ _SNAPSHOT            │ │                      │
-  └──────────┬───────────┘ └──────────┬───────────┘ └──────────┬───────────┘
-             │                        │                        │
-             └────────────────────────┼────────────────────────┘
-                                      │
-                                      ▼
-  ┌──────────────────────────────────────────────────────────────────────────┐
-  │               Observability Dashboard Layer (4 Views)                    │
-  │                                                                          │
-  │  ┌──────────────────────┐  ┌────────────────────┐                        │
-  │  │ Pipeline Health      │  │ Pipeline Summary   │                        │
-  │  │ Dashboard            │  │ Executive KPIs     │                        │
-  │  │ 22 rows              │  │ Single row         │                        │
-  │  │ OVERALL_HEALTH/table │  │                    │                        │
-  │  └──────────────────────┘  └────────────────────┘                        │
-  │                                                                          │
-  │  ┌──────────────────────┐  ┌────────────────────┐                        │
-  │  │ Active Alerts        │  │ Task Execution     │                        │
-  │  │ CRITICAL first       │  │ History            │                        │
-  │  │ Acknowledge flow     │  │ Real-time          │                        │
-  │  │                      │  │ Last 24h           │                        │
-  │  └──────────────────────┘  └────────────────────┘                        │
-  └──────────────────────────────────────────────────────────────────────────┘
+    TASK_TRIGGER --> ORCH
 
-  ┌─────────────────────────────────────┐
-  │ Cleanup Task: SUN 2AM               │
-  │ 90-day retention                    │
-  └─────────────────────────────────────┘
+    ORCH -->|Step 1| STREAM_SP
+    ORCH -->|Step 2| TASK_SP
+    ORCH -->|Step 3| ALERT_SP
+
+    subgraph StreamHealth["Stream Health Check"]
+        STREAM_SP["SP_CAPTURE_STREAM_HEALTH<br/>SHOW STREAMS + RESULT_SCAN<br/>Stale detection + staleness countdown<br/>Covers: D_RAW.SADB + D_RAW.EHMS"]
+    end
+
+    subgraph TaskHealth["Task Health Check"]
+        TASK_SP["SP_CAPTURE_TASK_HEALTH<br/>INFORMATION_SCHEMA.TASK_HISTORY()<br/>Real-time (0 latency) task status<br/>Last run, duration, success/failure"]
+    end
+
+    subgraph AlertGen["Alert Generation"]
+        ALERT_SP["SP_GENERATE_ALERTS<br/>3 alert types with severity levels<br/>Built-in deduplication (1hr / 4hr)<br/>Prevents alert flooding"]
+    end
+
+    STREAM_SP --> STREAM_SNAP[("CDC_STREAM_HEALTH_SNAPSHOT")]
+    TASK_SP --> TASK_SNAP[("CDC_TASK_HEALTH_SNAPSHOT")]
+    ALERT_SP --> ALERT_LOG[("CDC_ALERT_LOG")]
+
+    STREAM_SNAP -.-> VIEWS
+    TASK_SNAP -.-> VIEWS
+    ALERT_LOG -.-> VIEWS
+
+    subgraph VIEWS["Observability Dashboard Layer (4 Views)"]
+        V1["Pipeline Health Dashboard<br/>22 rows - OVERALL_HEALTH per table"]
+        V2["Pipeline Summary<br/>Executive KPIs - Single row"]
+        V3["Active Alerts<br/>CRITICAL first - Acknowledge flow"]
+        V4["Task Execution History<br/>Real-time - Last 24h - 0 latency"]
+    end
+
+    CLEANUP["Cleanup Task: SUN 2AM - 90-day retention"]
+
+    style CONFIG fill:#d5f5e3,stroke:#27ae60,stroke-width:2px
+    style TASK_TRIGGER fill:#ebf5fb,stroke:#2471a3,stroke-width:2px
+    style ORCH fill:#2471a3,stroke:#2471a3,color:#fff
+    style STREAM_SP fill:#fff,stroke:#27ae60,stroke-width:2px
+    style TASK_SP fill:#fff,stroke:#27ae60,stroke-width:2px
+    style ALERT_SP fill:#fff,stroke:#e67e22,stroke-width:2px
+    style STREAM_SNAP fill:#f4ecf7,stroke:#8e44ad,stroke-width:1.5px
+    style TASK_SNAP fill:#f4ecf7,stroke:#8e44ad,stroke-width:1.5px
+    style ALERT_LOG fill:#c0392b,stroke:#c0392b,color:#fff
+    style V1 fill:#fff,stroke:#1abc9c,stroke-width:1.5px
+    style V2 fill:#fff,stroke:#1abc9c,stroke-width:1.5px
+    style V3 fill:#fff,stroke:#c0392b,stroke-width:1.5px
+    style V4 fill:#fff,stroke:#1abc9c,stroke-width:1.5px
+    style VIEWS fill:#e8f6f3,stroke:#1abc9c,stroke-width:2px
+    style CLEANUP fill:#f8f9fa,stroke:#bdc3c7,stroke-width:1px
 ```
 
 ---
@@ -206,47 +215,33 @@ The monitoring task intentionally omits the `WHEN SYSTEM$STREAM_HAS_DATA` clause
 
 ### Three alert types with severity-based prioritization and deduplication
 
-```
-         ┌───────────────────────────────────────┐
-         │  Monitoring Cycle Runs (Every 15 min)  │
-         └───────────────────┬───────────────────┘
-                             │
-                             ▼
-                       ┌───────────┐
-                      / Stream     \        YES     ┌──────────────────────────┐
-                     /  Stale?      \──────────────>│ STREAM_STALE             │
-                     \              /                │ Severity: CRITICAL       │
-                      \            /                 └──────────────────────────┘
-                       └─────┬────┘
-                             │ NO
-                             ▼
-                       ┌───────────┐
-                      / <12 hrs to \        YES     ┌──────────────────────────┐
-                     /  stale?      \──────────────>│ STREAM_STALENESS_WARNING │
-                     \              /                │ Severity: WARNING        │
-                      \            /                 └──────────────────────────┘
-                       └─────┬────┘
-                             │ NO
-                             ▼
-                       ┌───────────┐
-                      / Task       \        YES     ┌──────────────────────────┐
-                     /  Failed?     \──────────────>│ TASK_FAILURE             │
-                     \              /                │ Severity: CRITICAL       │
-                      \            /                 └──────────────────────────┘
-                       └─────┬────┘
-                             │ NO
-                             ▼
-                    ┌────────────────┐
-                    │    HEALTHY     │
-                    └────────────────┘
+```mermaid
+flowchart TD
+    TRIGGER["Monitoring Cycle Runs (Every 15 min)"]
+    TRIGGER --> STALE_CHECK{"Stream<br/>Stale?"}
 
-  ┌────────────────────────────────────────────────────┐
-  │ Dedup: 1hr CRITICAL / 4hr WARNING                   │
-  └────────────────────────────────────────────────────┘
+    STALE_CHECK -->|YES| STREAM_STALE["STREAM_STALE<br/>Severity: CRITICAL"]
+    STALE_CHECK -->|NO| STALENESS_CHECK{"< 12 hrs to<br/>stale?"}
 
-  ┌────────────────────────────────────────────────────┐
-  │ SP_ACKNOWLEDGE_ALERT()                              │
-  └────────────────────────────────────────────────────┘
+    STALENESS_CHECK -->|YES| STALENESS_WARN["STREAM_STALENESS_WARNING<br/>Severity: WARNING"]
+    STALENESS_CHECK -->|NO| TASK_CHECK{"Task<br/>Failed?"}
+
+    TASK_CHECK -->|YES| TASK_FAIL["TASK_FAILURE<br/>Severity: CRITICAL"]
+    TASK_CHECK -->|NO| HEALTHY["HEALTHY"]
+
+    DEDUP["Dedup: 1hr CRITICAL / 4hr WARNING"]
+    ACK["SP_ACKNOWLEDGE_ALERT()"]
+
+    style TRIGGER fill:#2471a3,stroke:#2471a3,color:#fff
+    style STALE_CHECK fill:#f4ecf7,stroke:#8e44ad,stroke-width:2px
+    style STREAM_STALE fill:#c0392b,stroke:#c0392b,color:#fff
+    style STALENESS_CHECK fill:#fdf2e9,stroke:#e67e22,stroke-width:2px
+    style STALENESS_WARN fill:#e67e22,stroke:#e67e22,color:#fff
+    style TASK_CHECK fill:#fdedec,stroke:#c0392b,stroke-width:2px
+    style TASK_FAIL fill:#c0392b,stroke:#c0392b,color:#fff
+    style HEALTHY fill:#27ae60,stroke:#27ae60,color:#fff
+    style DEDUP fill:#d6eaf8,stroke:#2471a3,stroke-width:1.5px
+    style ACK fill:#d5f5e3,stroke:#27ae60,stroke-width:1.5px
 ```
 
 ---
@@ -323,13 +318,23 @@ Last 24 hours of task executions from Snowflake's real-time INFORMATION_SCHEMA. 
 
 ### All databases dropped and rebuilt from scratch. Every object compiled and executed successfully.
 
-```
- ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌────────────┐
- │ DROP ALL │────>│ CREATE   │────>│ DEPLOY   │────>│ EXECUTE  │────>│ VALIDATE │────>│ ALL PASSED │
- │ D_RAW +  │     │ 2 DBs +  │     │ 17 objects│     │ Full     │     │ Views +  │     │            │
- │ D_BRONZE │     │ 4 schemas│     │ + config  │     │ cycle +  │     │ alerts + │     │ Score:     │
- │          │     │          │     │           │     │ SPs      │     │ dedup    │     │ 8.8 / 10   │
- └──────────┘     └──────────┘     └──────────┘     └──────────┘     └──────────┘     └────────────┘
+```mermaid
+flowchart LR
+    DROP["DROP ALL<br/>D_RAW + D_BRONZE"]
+    CREATE["CREATE<br/>2 DBs + 4 schemas"]
+    DEPLOY["DEPLOY<br/>17 objects + config"]
+    EXECUTE["EXECUTE<br/>Full cycle + SPs"]
+    VALIDATE["VALIDATE<br/>Views + alerts + dedup"]
+    PASSED["ALL PASSED<br/>Score: 8.8 / 10"]
+
+    DROP --> CREATE --> DEPLOY --> EXECUTE --> VALIDATE --> PASSED
+
+    style DROP fill:#fdedec,stroke:#c0392b,stroke-width:2px
+    style CREATE fill:#d5f5e3,stroke:#27ae60,stroke-width:2px
+    style DEPLOY fill:#d5f5e3,stroke:#27ae60,stroke-width:2px
+    style EXECUTE fill:#d5f5e3,stroke:#27ae60,stroke-width:2px
+    style VALIDATE fill:#d5f5e3,stroke:#27ae60,stroke-width:2px
+    style PASSED fill:#27ae60,stroke:#27ae60,color:#fff
 ```
 
 ### Test Results
