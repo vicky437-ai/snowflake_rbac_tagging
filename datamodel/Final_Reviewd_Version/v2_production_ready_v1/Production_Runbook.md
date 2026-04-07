@@ -16,7 +16,7 @@ This runbook provides step-by-step instructions for setting up and running the `
 | pip | 21.0+ | Python package installer (ships with Python) |
 | Git | 2.30+ | Version control, used by `git-push` command |
 | Snowflake CLI (`snow`) | 3.0+ | Deploy and execute dbt projects natively on Snowflake |
-| dbt-core + dbt-snowflake | 1.7+ | Local dbt compilation and validation |
+| dbt-core + dbt-snowflake | 1.7+ | Local dbt compilation and validation (optional if deploying via `snow dbt deploy`) |
 
 ### Snowflake Requirements
 
@@ -27,7 +27,7 @@ This runbook provides step-by-step instructions for setting up and running the `
 | Database | Target database for dbt models (e.g. `MY_DATABASE`) |
 | Source schema | Schema containing source tables that Informatica mappings reference |
 | Target schema | Schema where dbt models will be materialized (e.g. `INFORMATICA_TO_DBT`) |
-| Deploy schema | Schema for the Snowflake-native dbt project object (e.g. `DBT_INGEST`) |
+| Deploy schema | Schema for the Snowflake-native dbt project object (e.g. `MY_DBT_SCHEMA`) |
 | Cortex LLM access | The `convert` command uses `SNOWFLAKE.CORTEX.COMPLETE()` for code generation |
 
 ### Input Files
@@ -175,6 +175,8 @@ pip install dbt-core dbt-snowflake
 dbt --version
 ```
 
+> **Note:** A local dbt installation is optional if you plan to deploy directly to Snowflake using `infa2dbt deploy --mode direct` and execute via `snow dbt execute`. The Snowflake-native dbt runtime handles compilation, model materialization, and testing without a local dbt CLI.
+
 ---
 
 ## Step 6: Prepare Input Files
@@ -304,7 +306,48 @@ snow dbt execute -c myconnection \
     <YOUR_PROJECT_NAME> test
 ```
 
-### 7.7 Push to Git
+### 7.7 Reconcile Source vs Target
+
+Validate that the dbt output matches the original source data using the 6-layer reconciliation engine:
+
+```bash
+infa2dbt reconcile \
+    -sd <YOUR_DATABASE> -ss <YOUR_SOURCE_SCHEMA> \
+    -td <YOUR_DATABASE> -ts <YOUR_DEPLOY_SCHEMA> \
+    -c <YOUR_CONNECTION> -l all \
+    -o ./recon_reports --format both
+```
+
+**What each layer checks**:
+
+| Layer | Check | What It Catches |
+|-------|-------|----------------|
+| L1 | Schema comparison | Missing or mistyped columns, wrong data types |
+| L2 | Row count | Dropped or duplicated rows |
+| L3 | Aggregate (SUM/MIN/MAX) | Truncated values, rounding errors, NULL handling |
+| L4 | Hash fingerprint | Any data difference (fast full-table check) |
+| L5 | Row-level diff | Exactly which rows and columns differ |
+| L6 | Business rules | Custom SQL assertions from YAML config |
+
+**For a quick smoke test**, run only L1 and L2:
+```bash
+infa2dbt reconcile \
+    -sd <YOUR_DATABASE> -ss <YOUR_SOURCE_SCHEMA> \
+    -td <YOUR_DATABASE> -ts <YOUR_DEPLOY_SCHEMA> \
+    -c <YOUR_CONNECTION> -l L1,L2
+```
+
+**For config-driven reconciliation** with explicit table mappings:
+```bash
+infa2dbt reconcile \
+    -sd <YOUR_DATABASE> -ss <YOUR_SOURCE_SCHEMA> \
+    -td <YOUR_DATABASE> -ts <YOUR_DEPLOY_SCHEMA> \
+    -c <YOUR_CONNECTION> --config ./recon_config.yml
+```
+
+Reports are written to `./recon_reports/` as HTML (interactive dashboard) and JSON (CI/CD integration).
+
+### 7.8 Push to Git
 
 Commit and push the generated dbt project to a Git repository:
 
@@ -325,6 +368,7 @@ infa2dbt git-push \
 | Issue | Cause | Resolution |
 |-------|-------|------------|
 | `ModuleNotFoundError: informatica_to_dbt` | Framework not installed | Run `pip install -e .` from the project root |
+| `ModuleNotFoundError: lxml` (Python 3.12+) | `snowflake.snowpark` namespace package conflicts with `lxml` import | Prefix all CLI commands with `PYTHONPATH=""` (e.g. `PYTHONPATH="" python -m informatica_to_dbt.cli convert ...`) |
 | `snow: command not found` | Snowflake CLI not installed | Run `pip install snowflake-cli` |
 | `dbt: command not found` | dbt not installed | Run `pip install dbt-core dbt-snowflake` |
 | `Connection failed` | Bad credentials in `config.toml` | Verify account, user, password; run `snow connection test` |
@@ -332,6 +376,8 @@ infa2dbt git-push \
 | `Cortex LLM timeout` | Large mapping or slow LLM response | Retry the `convert` command; cached results are reused automatically |
 | `dbt test failures` | Source data quality issues | Review test definitions in `_stg__schema.yml`; adjust accepted values or thresholds |
 | `Permission denied on deploy` | Insufficient Snowflake role | Ensure the configured role has `CREATE DATABASE`, `CREATE SCHEMA`, and `USAGE` grants |
+| `TRY_CAST from TIMESTAMP_NTZ to DATE not supported` | `TRY_TO_DATE()` called on a TIMESTAMP_NTZ column | Use `column::DATE` cast instead; the post-processor handles this automatically |
+| `accepted_values` test format error | dbt-fusion v2.0 uses `arguments:` wrapper; Snowflake native dbt 1.9.x does not | Skip local `dbt compile` if using dbt-fusion v2.0. Deploy directly via `snow dbt deploy` and execute via `snow dbt execute` — Snowflake native dbt 1.9.4 handles compilation correctly |
 
 ### Verifying a Successful Run
 
@@ -350,7 +396,13 @@ snow sql -c myconnection -q "SELECT COUNT(*) FROM <YOUR_DATABASE>.<YOUR_SCHEMA>.
 If you need to re-run conversion from scratch (e.g. after updating XML files):
 
 ```bash
-# Clear the LLM response cache
+# List cached entries to identify stale ones
+infa2dbt cache list
+
+# Remove a specific stale cache entry by key prefix
+infa2dbt cache remove <KEY>
+
+# Or clear the entire LLM response cache
 infa2dbt cache clear --yes
 
 # Re-run convert
@@ -381,6 +433,7 @@ project_root/
 │       ├── seeds/
 │       ├── snapshots/
 │       └── tests/
+├── recon_reports/                   # Reconciliation reports (HTML + JSON)
 ├── pyproject.toml
 └── src/
     └── informatica_to_dbt/         # Framework source code
@@ -391,6 +444,8 @@ project_root/
 ## Quick Reference — Full Pipeline (Copy-Paste)
 
 Replace all `<PLACEHOLDER>` values with your environment-specific settings:
+
+> **Python 3.12+ users**: Prefix all `infa2dbt` commands below with `PYTHONPATH=""` if you encounter `lxml` import errors.
 
 ```bash
 # Activate virtual environment
@@ -418,6 +473,10 @@ infa2dbt deploy -p ./output/dbt_project -d <DATABASE> -s <DEPLOY_SCHEMA> \
 snow dbt execute -c <CONNECTION> --database <DATABASE> --schema <DEPLOY_SCHEMA> <PROJECT_NAME> run
 snow dbt execute -c <CONNECTION> --database <DATABASE> --schema <DEPLOY_SCHEMA> <PROJECT_NAME> test
 
-# 7. Git Push
+# 7. Reconcile
+infa2dbt reconcile -sd <DATABASE> -ss <SOURCE_SCHEMA> -td <DATABASE> -ts <DEPLOY_SCHEMA> \
+    -c <CONNECTION> -l all -o ./recon_reports --format both
+
+# 8. Git Push
 infa2dbt git-push -p ./output/dbt_project --remote-url <GIT_REPO_URL> -b main -m "Migration complete"
 ```

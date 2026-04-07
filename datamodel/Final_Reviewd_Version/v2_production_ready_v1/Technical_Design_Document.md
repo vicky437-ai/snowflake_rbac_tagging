@@ -152,7 +152,7 @@ Manual conversion of Informatica mappings to dbt is labor-intensive, error-prone
 | Benefit | Details |
 |---------|---------|
 | **One CLI command** | `infa2dbt convert` handles parsing, analysis, LLM generation, validation, and assembly |
-| **7-step pipeline** | convert → discover → report → validate → deploy → execute → git-push |
+| **8-step pipeline** | convert → discover → report → validate → deploy → execute → reconcile → git-push |
 | **Scheduling** | Deploy as a Snowflake TASK for automated daily/hourly execution |
 | **Assessment reports** | EWI (Errors/Warnings/Informational) HTML + JSON reports for conversion transparency |
 | **Cache management** | Skip LLM calls on re-runs, clear cache when XML changes |
@@ -246,11 +246,11 @@ The framework converts 60+ Informatica PowerCenter expression functions to Snowf
 
 | Feature | Description |
 |---------|-------------|
-| **Post-Processing** | 15+ pattern replacements clean Informatica residuals (IIF→IFF, ISNULL→IFNULL, etc.) |
-| **9 SQL Validation Checks** | Syntax, ref/source correctness, column alignment, data type compatibility |
+| **Post-Processing** | 30+ pattern fixes clean Informatica residuals (21 function replacements, 5 regex patterns, 4 pre-pass conversions, sanitization) |
+| **15 SQL Validation Checks** | Syntax, ref/source correctness, Informatica residuals, truncation detection, balanced parens/braces, etc. |
 | **YAML Schema Validation** | Structure, naming conventions, test configuration |
 | **Project-Level Validation** | DAG integrity, circular reference detection, naming collision prevention |
-| **Quality Scoring** | Every generated mapping scored 0-100 across 5 dimensions (correctness, completeness, style, performance, testability) |
+| **Quality Scoring** | Every generated mapping scored 0-100 across 5 dimensions (file_structure, dbt_conventions, sql_syntax, function_conversion, yaml_quality) |
 
 ---
 
@@ -309,11 +309,14 @@ flowchart LR
 | **Self-healing** | None (manual EWI fixes) | **Automatic** (2-attempt correction loop) |
 | **Complexity analysis** | Basic | **11-dimension scoring** (0-100) |
 | **Quality scoring** | None | **5-dimension quality score** (0-100) |
+| **SQL validation** | None | **15 static checks** (syntax, refs, Informatica residuals, truncation, etc.) |
+| **Post-processing** | None | **30+ pattern fixes** (function conversion, type safety, Snowflake sanitization) |
 | **EWI reports** | HTML reports | **HTML + JSON** assessment reports |
 | **Source discovery** | Requires user DDL scripts | **Auto** from Snowflake, XML, or JSON |
 | **Git integration** | Manual / CI-CD docs | **Built-in** git-push command |
 | **Deployment modes** | `snow dbt deploy` only | **3 modes**: direct, Git-based, TASK scheduling |
 | **Cross-mapping ref()** | Not possible (separate projects) | **Full** cross-mapping references |
+| **Post-deployment reconciliation** | None | **6-layer validation pyramid** (schema, row count, aggregate, hash, row diff, business rules) |
 
 ### 5.3 Scoring Comparison
 
@@ -329,7 +332,9 @@ flowchart LR
 | **CI/CD** (Git + deploy automation) | 8/10 | 8/10 |
 | **Self-healing** (auto-fix errors) | 0/10 | 8/10 |
 | **Informatica coverage** (transforms + functions) | 4/10 | 9/10 |
-| **Overall** | **~65/100** | **~80/100** |
+| **Post-processing** (residual cleanup) | 0/10 | 9/10 |
+| **Reconciliation** (source vs target validation) | 0/10 | 9/10 |
+| **Overall** | **~55/120** | **~100/120** |
 
 ### 5.4 Key Differentiators
 
@@ -337,11 +342,13 @@ flowchart LR
 
 2. **Auto-generated tests**: Tests are generated for every model. SnowConvert generates zero tests — the user must write them manually.
 
-3. **Self-healing**: When the LLM makes a mistake, the framework catches it (9 SQL checks + YAML validation + project-level ref checks), sends the errors back to the LLM, and gets corrected output. SnowConvert has no equivalent.
+3. **Self-healing**: When the LLM makes a mistake, the framework catches it (15 SQL checks + YAML validation + project-level ref checks), sends the errors back to the LLM, and gets corrected output. SnowConvert has no equivalent.
 
 4. **Full Informatica coverage**: SnowConvert's Informatica support is limited to ~15 functions and basic transforms. infa2dbt supports 30+ transform types and 60+ functions.
 
 5. **Single consolidated project**: SnowConvert creates separate dbt projects per Data Flow Task (no cross-mapping references). infa2dbt merges everything into one project with full `ref()` support across mappings.
+
+6. **Post-deployment reconciliation**: A 6-layer validation pyramid (schema, row count, aggregate, hash, row diff, business rules) verifies migrated data matches the source. SnowConvert has no post-deployment validation.
 
 ### 5.5 Where SnowConvert AI is Better
 
@@ -369,8 +376,8 @@ flowchart TB
         CACHE_CHK{{"Cache\nCheck"}}
         CHUNK["Token-Aware\nChunker"]
         GENERATE["LLM Code\nGenerator"]
-        POSTPROC["Post-Processor\n15+ pattern fixes"]
-        VALIDATE_S["Static Validator\n9 SQL checks"]
+        POSTPROC["Post-Processor\n30+ pattern fixes"]
+        VALIDATE_S["Static Validator\n15 SQL checks"]
         HEAL{{"Self-Healing\nLoop"}}
         SCORE["Quality Scorer\n5-dimension 0-100"]
         CACHE_ST["Cache Store\nSHA-256"]
@@ -441,18 +448,21 @@ flowchart TB
 | EWI report generation | Local Python | No |
 | Git operations | Local git CLI | No |
 | Snowflake deployment | Snowflake (via `snow` CLI or SQL) | **Yes** |
+| Reconciliation (6-layer) | Snowflake (SQL queries via connector) | **Yes** |
+| Reconciliation reports | Local Python | No |
 
 ### 6.3 Component Architecture
 
 ```mermaid
 flowchart TB
-    CLI["CLI (cli.py)\ninfa2dbt convert | discover | report |\nvalidate | deploy | git-push | cache | version"]
+    CLI["CLI (cli.py)\ninfa2dbt convert | discover | report |\nvalidate | deploy | reconcile | git-push | cache | version"]
 
     CLI --> PARSER["XML Parser\nparser.py + models.py +\ndependency_graph.py"]
     CLI --> DISCO["Schema Discovery\nschema_discovery.py +\nxml_inventory.py"]
     CLI --> REPORT["EWI Report Generator\newi_report.py"]
     CLI --> VALID["dbt Validator\ndbt_validator.py\n(compile + run + test)"]
     CLI --> DEPLOYER["Deployer\ndeployer.py\n(direct + git + schedule)"]
+    CLI --> RECONM["Reconciliation Engine\nreconciliation/\n(6-layer validation)"]
     CLI --> GITM["Git Manager\ngit_manager.py\n(commit + push)"]
     CLI --> CACHM["Cache Manager\nconversion_cache.py\n(list + clear + stats)"]
 
@@ -466,6 +476,7 @@ flowchart TB
     style REPORT fill:#9B59B6,stroke:#6C3483,color:#fff
     style VALID fill:#F5A623,stroke:#C47D1A,color:#fff
     style DEPLOYER fill:#7ED321,stroke:#5A9A18,color:#fff
+    style RECONM fill:#E74C3C,stroke:#C0392B,color:#fff
     style GITM fill:#7ED321,stroke:#5A9A18,color:#fff
     style CACHM fill:#9B59B6,stroke:#6C3483,color:#fff
     style ORCH fill:#F5A623,stroke:#C47D1A,color:#fff
@@ -554,7 +565,7 @@ The registry maps 30+ Informatica transformation types to dbt SQL patterns, prov
 
 ```mermaid
 flowchart LR
-    A["LLM Output"] --> B["Validate\n(9 SQL checks +\nYAML + project)"]
+    A["LLM Output"] --> B["Validate\n(15 SQL checks +\nYAML + project)"]
     B -->|"Pass"| C["Accept"]
     B -->|"Errors"| D["Send errors\nback to LLM"]
     D --> E["LLM corrects"]
@@ -570,7 +581,7 @@ flowchart LR
 ```
 
 The self-healing loop:
-1. Validates the LLM output against 9 SQL checks, YAML structure rules, and project-level constraints
+1. Validates the LLM output against 15 SQL checks, YAML structure rules, and project-level constraints
 2. If errors are found, constructs an error correction prompt with the specific failures
 3. Sends the errors back to the LLM for correction (up to 2 attempts)
 4. If still failing after 2 attempts, accepts the output with EWI warnings in the assessment report
@@ -581,20 +592,14 @@ The self-healing loop:
 
 **Module**: `generator/post_processor.py`
 
-**Pattern Replacements** (15+):
+**Pattern Fixes** (30+):
 
-| Informatica Pattern | Snowflake Replacement |
-|---------------------|----------------------|
-| `IIF(condition, true, false)` | `IFF(condition, true, false)` |
-| `ISNULL(expr)` | `expr IS NULL` or `IFNULL(expr, default)` |
-| `DECODE(expr, val1, res1, ...)` | `DECODE(expr, val1, res1, ...)` (same syntax) |
-| `ADD_TO_DATE(date, 'DD', n)` | `DATEADD('DAY', n, date)` |
-| `GET_DATE_PART(date, 'MM')` | `DATE_PART('MONTH', date)` |
-| `SESSSTARTTIME` | `CURRENT_TIMESTAMP()` |
-| `SYSDATE` | `CURRENT_TIMESTAMP()` |
-| `TO_INTEGER(expr)` | `TO_NUMBER(expr)` |
-| `IS_NUMBER(expr)` | `TRY_TO_NUMBER(expr) IS NOT NULL` |
-| `IS_DATE(expr)` | `TRY_TO_DATE(expr) IS NOT NULL` |
+| Category | Count | Examples |
+|----------|-------|---------|
+| Function text replacements | 21 | `IIF→IFF`, `ISNULL→IFNULL`, `NVL→COALESCE`, `ADD_TO_DATE→DATEADD`, `SYSDATE→CURRENT_TIMESTAMP()`, `TO_INTEGER→TO_NUMBER`, `REG_EXTRACT→REGEXP_SUBSTR`, etc. |
+| Regex pattern replacements | 5 | `:LKP` references, `ERROR()`, `ABORT()`, `$$PARAMETER`, `$PM` parameters |
+| Pre-pass conversions | 4 | `ISNULL(x)` boolean→`x IS NULL`, `NVL2(a,b,c)→IFF(a IS NOT NULL,b,c)`, `REPLACESTR` case_flag stripping, `DECODE(TRUE,...)→CASE WHEN` |
+| Sanitization helpers | 4 | Markdown fence removal, safe type conversions (`TO_NUMBER→TRY_TO_NUMBER`, `TO_DATE→TRY_TO_DATE`, `TO_TIMESTAMP→TRY_TO_TIMESTAMP`), XMLGET casting fix, special column quoting |
 
 ### 7.7 Quality Scorer
 
@@ -604,11 +609,11 @@ The self-healing loop:
 
 | Dimension | Weight | What It Measures |
 |-----------|--------|-----------------|
-| Correctness | 30% | SQL syntax validity, ref/source accuracy, column alignment |
-| Completeness | 25% | All source fields mapped, all transforms covered |
-| Style | 15% | dbt naming conventions, CTE usage, formatting |
-| Performance | 15% | Materialization choice, incremental logic, join efficiency |
-| Testability | 15% | Schema tests generated, coverage depth |
+| `file_structure` | 20% | Expected files present per strategy (models, schema YAML, sources) |
+| `dbt_conventions` | 25% | Proper use of `config()`, `ref()`, `source()` macros |
+| `sql_syntax` | 20% | Balanced parentheses/braces, no trailing semicolons, valid SQL |
+| `function_conversion` | 25% | No leftover Informatica functions or patterns in output |
+| `yaml_quality` | 10% | YAML files present and parseable, correct structure |
 
 ### 7.8 Output Caching
 
@@ -616,11 +621,12 @@ The self-healing loop:
 
 **Module**: `cache/conversion_cache.py`
 
-**Cache key** = SHA-256 hash of: `XML content + converter_version + prompt_version + LLM model name`
+**Cache key** = SHA-256 hash of: `XML content + converter_version + llm_model + mapping_name + prompt_hash`
 
 - **Before LLM call**: Check `.infa2dbt/cache/<hash>/` — if hit, return cached output (skip LLM entirely)
 - **After LLM call**: Persist output to cache directory
-- **CLI management**: `infa2dbt cache list`, `infa2dbt cache clear --yes`, `infa2dbt cache stats`
+- **Content-addressed, append-only**: Each unique input combination creates a new cache entry. Old entries are never overwritten — they remain on disk but become stale (unused) when any input changes. There is no TTL or automatic expiry.
+- **CLI management**: `infa2dbt cache list`, `infa2dbt cache remove <key>`, `infa2dbt cache clear --yes`, `infa2dbt cache stats`
 
 ### 7.9 Schema Discovery
 
@@ -701,7 +707,8 @@ flowchart LR
     C --> D["validate\nCompile + Run\n+ Test"]
     D --> E["deploy\nSnowflake-native\ndbt project"]
     E --> F["execute\nsnow dbt execute\nrun + test"]
-    F --> G["git-push\nCommit + Push\nto repository"]
+    F --> G["reconcile\nSource vs Target\nvalidation"]
+    G --> H["git-push\nCommit + Push\nto repository"]
 
     style A fill:#4A90D9,stroke:#2C5F8A,color:#fff
     style B fill:#4A90D9,stroke:#2C5F8A,color:#fff
@@ -709,7 +716,8 @@ flowchart LR
     style D fill:#F5A623,stroke:#C47D1A,color:#fff
     style E fill:#7ED321,stroke:#5A9A18,color:#fff
     style F fill:#7ED321,stroke:#5A9A18,color:#fff
-    style G fill:#9B59B6,stroke:#6C3483,color:#fff
+    style G fill:#E67E22,stroke:#D35400,color:#fff
+    style H fill:#9B59B6,stroke:#6C3483,color:#fff
 ```
 
 ### 8.2 Pipeline Stage Details
@@ -722,7 +730,8 @@ flowchart LR
 | 4. Validate | `infa2dbt validate` | Runs `dbt compile`, `dbt run`, and `dbt test` against Snowflake | dbt project | Pass/fail results |
 | 5. Deploy | `infa2dbt deploy` | Deploys to Snowflake as a native dbt project object | dbt project | Snowflake dbt project object |
 | 6. Execute | `snow dbt execute` | Runs models and tests natively on Snowflake | Deployed project | Materialized views + tables |
-| 7. Git Push | `infa2dbt git-push` | Commits and pushes to Git repository | dbt project | Git commit + push |
+| 7. Reconcile | `infa2dbt reconcile` | 6-layer validation pyramid: schema, row count, aggregate, hash, row diff, business rules | Source + target tables | Reconciliation report (PASS/FAIL per check) |
+| 8. Git Push | `infa2dbt git-push` | Commits and pushes to Git repository | dbt project | Git commit + push |
 
 ---
 
@@ -928,6 +937,8 @@ models:
               values: ['ACTIVE', 'INACTIVE', 'RETIRED']
 ```
 
+> **Compatibility Note:** Snowflake's native dbt runtime (dbt-core 1.9.x, used by `snow dbt execute`) requires the standard `accepted_values` format shown above (no `arguments:` wrapper). dbt-fusion 2.0 requires an `arguments:` wrapper around `values:`. These formats are mutually exclusive — use the standard format for Snowflake-native deployment.
+
 ### 11.3 Validation Pipeline
 
 ```mermaid
@@ -1021,6 +1032,63 @@ AS
 
 ---
 
+### 12.4 Post-Deployment Reconciliation
+
+After deployment and execution, the reconciliation engine validates that dbt output matches the original source data. This is a critical quality gate before promoting to production.
+
+```mermaid
+flowchart TB
+    SRC["Source Schema\n(legacy tables)"] --> TM["TableMapper\nAuto-discover or\nYAML config"]
+    TGT["Target Schema\n(dbt output)"] --> TM
+    TM --> ENGINE["ReconciliationEngine"]
+
+    ENGINE --> L1["L1: Schema\nColumn names + types"]
+    ENGINE --> L2["L2: Row Count\nCOUNT(*)"]
+    ENGINE --> L3["L3: Aggregate\nSUM / MIN / MAX /\nCOUNT DISTINCT"]
+    ENGINE --> L4["L4: Hash\nHASH_AGG()"]
+    ENGINE --> L5["L5: Row Diff\nFULL OUTER JOIN\nper-column mismatch"]
+    ENGINE --> L6["L6: Business Rules\nCustom SQL assertions"]
+
+    L1 --> REPORT["ReportGenerator\nHTML dashboard +\nJSON output"]
+    L2 --> REPORT
+    L3 --> REPORT
+    L4 --> REPORT
+    L5 --> REPORT
+    L6 --> REPORT
+
+    style SRC fill:#4A90D9,stroke:#2C5F8A,color:#fff
+    style TGT fill:#4A90D9,stroke:#2C5F8A,color:#fff
+    style TM fill:#F5A623,stroke:#C47D1A,color:#fff
+    style ENGINE fill:#E74C3C,stroke:#C0392B,color:#fff
+    style L1 fill:#7ED321,stroke:#5A9A18,color:#fff
+    style L2 fill:#7ED321,stroke:#5A9A18,color:#fff
+    style L3 fill:#F5A623,stroke:#C47D1A,color:#fff
+    style L4 fill:#F5A623,stroke:#C47D1A,color:#fff
+    style L5 fill:#E74C3C,stroke:#C0392B,color:#fff
+    style L6 fill:#E74C3C,stroke:#C0392B,color:#fff
+    style REPORT fill:#7ED321,stroke:#5A9A18,color:#fff
+```
+
+**Key design properties**:
+- **Generic** — All SQL is built dynamically from runtime-discovered column metadata. No table names, column names, or schemas are hard-coded.
+- **Layered** — Each layer is independent. Run all 6 or select specific layers via `-l L1,L2,L3`.
+- **Two modes** — Auto-discovery matches tables by name via `INFORMATION_SCHEMA`. Config-driven mode uses a YAML file for explicit mappings, composite PKs, column exclusions, and numeric tolerances.
+- **Snowflake-native** — Uses `HASH_AGG()` for L4 and `INFORMATION_SCHEMA.COLUMNS` for schema discovery.
+- **Serializable output** — `ReconciliationMetrics` produces JSON-safe summaries for CI/CD integration.
+
+**Module structure** (6 source files):
+
+| File | Purpose |
+|------|---------|
+| `reconciliation/engine.py` | Core 6-layer validation engine — builds and executes all SQL dynamically |
+| `reconciliation/models.py` | Data classes: `TableReconciliation`, `ReconciliationReport`, `ReconState` |
+| `reconciliation/table_map.py` | `TableMapper` (auto-discovery) and `ReconConfig` (YAML config loader) |
+| `reconciliation/recon_metrics.py` | Serializable summary metrics for CI/CD |
+| `reconciliation/recon_report.py` | HTML dashboard and JSON report generator |
+| `reconciliation/__init__.py` | Public API exports |
+
+---
+
 ## 13. CLI Reference Summary
 
 The full CLI reference is available in [CLI_Reference.md](CLI_Reference.md).
@@ -1032,6 +1100,7 @@ The full CLI reference is available in [CLI_Reference.md](CLI_Reference.md).
 | `infa2dbt report` | Generate EWI assessment report | `-p` project-dir, `-f` format (html/json/both) |
 | `infa2dbt validate` | Compile, run, and test dbt project | `-p` project, `--run-tests`, `--compile-only`, `-s` select |
 | `infa2dbt deploy` | Deploy to Snowflake | `-p` project, `-d` database, `-s` schema, `--mode` (direct/git/schedule) |
+| `infa2dbt reconcile` | Validate source vs target data | `-sd` source-db, `-ss` source-schema, `-td` target-db, `-ts` target-schema, `-l` layers |
 | `infa2dbt git-push` | Commit and push to Git | `-p` project, `--remote-url`, `-b` branch, `-m` message |
 | `infa2dbt cache` | Manage conversion cache | Subcommands: `list`, `clear` (with `--yes`), `stats` |
 | `infa2dbt version` | Show version | |
@@ -1047,6 +1116,7 @@ infa2dbt validate -p ./output/dbt_project --run-tests
 infa2dbt deploy -p ./output/dbt_project -d <DB> -s <schema> --connection <conn> --mode direct
 snow dbt execute -c <conn> --database <DB> --schema <schema> <PROJECT> run
 snow dbt execute -c <conn> --database <DB> --schema <schema> <PROJECT> test
+infa2dbt reconcile -sd <DB> -ss <source_schema> -td <DB> -ts <schema> -c <conn> -l all -o ./recon_reports --format both
 infa2dbt git-push -p ./output/dbt_project --remote-url <git_url> -b main
 ```
 
@@ -1098,9 +1168,9 @@ infa2dbt git-push -p ./output/dbt_project --remote-url <git_url> -b main
 
 ### 14.6 SHA-256 Caching for Determinism
 
-**Decision**: Cache LLM output keyed to a SHA-256 hash of input XML + converter version + prompt version + model name.
+**Decision**: Cache LLM output keyed to a SHA-256 hash of input XML + converter version + LLM model + mapping name + prompt hash.
 
-**Rationale**: LLM calls are inherently non-deterministic. The cache ensures that re-running `convert` on the same XML produces identical output without making another LLM call. This is critical for production reproducibility and CI/CD pipelines.
+**Rationale**: LLM calls are inherently non-deterministic. The cache ensures that re-running `convert` on the same XML produces identical output without making another LLM call. This is critical for production reproducibility and CI/CD pipelines. The cache is content-addressed and append-only — changing any input creates a new entry rather than overwriting the old one.
 
 ---
 
@@ -1131,12 +1201,12 @@ informatica_to_dbt/
 │   ├── llm_client.py              #   Snowflake Cortex calls
 │   ├── prompt_builder.py          #   Dynamic prompt construction
 │   ├── response_parser.py         #   File extraction from LLM output
-│   ├── post_processor.py          #   15+ pattern replacements
+│   ├── post_processor.py          #   30+ pattern fixes
 │   ├── quality_scorer.py          #   5-dimension quality scoring
 │   └── dbt_project_generator.py   #   Project config generation
 │
 ├── validator/                      # Static validation
-│   ├── sql_validator.py           #   9 SQL checks
+│   ├── sql_validator.py           #   15 SQL checks
 │   ├── yaml_validator.py          #   YAML structure validation
 │   └── project_validator.py       #   Project-level validation
 │

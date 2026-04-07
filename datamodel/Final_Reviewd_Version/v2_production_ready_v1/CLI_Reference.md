@@ -9,6 +9,8 @@ infa2dbt [OPTIONS] COMMAND [ARGS]...
 ```
 
 > **Note:** If `infa2dbt` is not installed as a global command, use `python -m informatica_to_dbt.cli` instead.
+> On **Python 3.12+** with `snowflake-snowpark-python` installed, prefix with `PYTHONPATH=""` to avoid
+> namespace-package conflicts: `PYTHONPATH="" python -m informatica_to_dbt.cli`.
 
 ### Global Options
 
@@ -29,6 +31,7 @@ infa2dbt [OPTIONS] COMMAND [ARGS]...
 | `cache` | Manage the conversion output cache |
 | `validate` | Validate a dbt project via `dbt compile` / `dbt run` / `dbt test` |
 | `deploy` | Deploy the dbt project to Snowflake |
+| `reconcile` | Validate source vs target data with 6-layer checks |
 | `git-push` | Commit and push the dbt project to Git |
 | `version` | Show version information |
 
@@ -55,7 +58,7 @@ infa2dbt convert --input <PATH> --output <PATH> [OPTIONS]
 | `--log-level` | `debug\|info\|warning\|error` | `info` | Logging verbosity |
 | `--no-cache` | FLAG | `False` | Disable output caching (always regenerate) |
 | `--clear-cache` | FLAG | `False` | Clear all cached conversions before running |
-| `--source-schema` | TEXT | `None` | Override source schema in all `_sources.yml` (e.g. `MOCK_SOURCES`) |
+| `--source-schema` | TEXT | `None` | Override source schema in all `_sources.yml` (e.g. `MY_SOURCE_SCHEMA`) |
 
 ### Examples
 
@@ -163,6 +166,14 @@ List all cached conversion entries.
 infa2dbt cache list [--cache-dir <PATH>]
 ```
 
+#### `infa2dbt cache remove`
+
+Remove a specific cached conversion entry by its key (first 12 characters of the SHA-256 hash).
+
+```bash
+infa2dbt cache remove <KEY> [--cache-dir <PATH>]
+```
+
 #### `infa2dbt cache clear`
 
 Clear all cached conversion entries.
@@ -191,6 +202,9 @@ infa2dbt cache stats [--cache-dir <PATH>]
 ```bash
 # List cached entries
 infa2dbt cache list
+
+# Remove a specific cached entry by key prefix
+infa2dbt cache remove 3a3685c51ac8
 
 # Show cache statistics
 infa2dbt cache stats
@@ -284,7 +298,7 @@ infa2dbt deploy --project <PATH> [OPTIONS]
 ```bash
 # Direct deployment (simplest)
 infa2dbt deploy -p ./my_dbt_project -d MY_DB -s MY_SCHEMA \
-    --connection myconnection
+    -n MY_PROJECT_NAME --connection myconnection
 
 # Git-based deployment
 infa2dbt deploy -p ./my_dbt_project --mode git \
@@ -299,6 +313,84 @@ infa2dbt deploy -p ./my_dbt_project --mode schedule \
 infa2dbt deploy -p ./my_dbt_project --mode git --dry-run \
     --git-url https://github.com/org/repo.git \
     --git-repo-name my_repo
+```
+
+---
+
+## `infa2dbt reconcile`
+
+Validate that dbt-generated target tables match the original source data. Runs a 6-layer validation pyramid comparing source and target schemas in Snowflake, producing HTML and JSON reports.
+
+**Layers**: L1 (Schema) → L2 (Row Count) → L3 (Aggregate) → L4 (Hash) → L5 (Row Diff) → L6 (Business Rules)
+
+```bash
+infa2dbt reconcile -sd <DATABASE> -ss <SCHEMA> -td <DATABASE> -ts <SCHEMA> [OPTIONS]
+```
+
+### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `-sd, --source-database` | TEXT | *(required)* | Source database name in Snowflake (legacy/source data) |
+| `-ss, --source-schema` | TEXT | *(required)* | Source schema name |
+| `-td, --target-database` | TEXT | *(required)* | Target database name in Snowflake (dbt output) |
+| `-ts, --target-schema` | TEXT | *(required)* | Target schema name |
+| `-c, --connection` | TEXT | `None` | Snowflake connection name from `~/.snowflake/config.toml` |
+| `-l, --layers` | TEXT | `all` | Comma-separated layers to run: `L1,L2,L3,L4,L5,L6` or `all` |
+| `--config` | PATH | `None` | Optional YAML config file with explicit table mappings, PKs, exclusions, tolerances |
+| `-o, --output` | PATH | `./recon_reports` | Output directory for reports |
+| `--format` | `html\|json\|both` | `both` | Report output format |
+
+### Operating Modes
+
+| Mode | Description |
+|------|-------------|
+| **Auto-Discovery** | Default. Matches tables by name between source and target schemas via `INFORMATION_SCHEMA`. No config file needed. |
+| **Config-Driven** | Pass `--config recon.yml` with explicit source→target mappings, primary key overrides, column exclusions, and numeric tolerances. |
+
+### Config File Format (optional)
+
+```yaml
+defaults:
+  primary_key: [ID]
+  exclude_columns: [ETL_LOAD_TS, DW_UPDATE_TS]
+  tolerance: 0.01
+
+tables:
+  - source: EQPMNT_AAR_BASE
+    target: STG_EQPMNT_AAR_BASE
+    primary_key: [EQUIP_INIT, EQUIP_NR]
+  - source: DIM_EQUIPMENT
+    target: DIM_EQUIPMENT
+    exclude_columns: [DW_CREATE_TS, DW_UPDATE_TS]
+```
+
+### Examples
+
+```bash
+# Auto-discovery: compare all matching tables between schemas
+infa2dbt reconcile \
+    -sd MY_DB -ss RAW_SOURCES \
+    -td MY_DB -ts DBT_OUTPUT \
+    -c myconnection -l all -o ./recon_reports --format both
+
+# Run only schema and row count checks (fast validation)
+infa2dbt reconcile \
+    -sd MY_DB -ss RAW_SOURCES \
+    -td MY_DB -ts DBT_OUTPUT \
+    -c myconnection -l L1,L2
+
+# Config-driven with explicit table mappings
+infa2dbt reconcile \
+    -sd MY_DB -ss RAW_SOURCES \
+    -td MY_DB -ts DBT_OUTPUT \
+    -c myconnection --config ./recon_config.yml
+
+# Generate only JSON report (for CI/CD pipelines)
+infa2dbt reconcile \
+    -sd MY_DB -ss RAW_SOURCES \
+    -td MY_DB -ts DBT_OUTPUT \
+    -c myconnection --format json
 ```
 
 ---
@@ -385,12 +477,18 @@ snow dbt execute -c myconnection \
 snow dbt execute -c myconnection \
     --database MY_DB --schema MY_SCHEMA MY_PROJECT test
 
-# 7. Push to Git
+# 7. Reconcile source vs target data
+infa2dbt reconcile \
+    -sd MY_DB -ss RAW_SOURCES \
+    -td MY_DB -ts MY_SCHEMA \
+    -c myconnection -l all -o ./recon_reports --format both
+
+# 8. Push to Git
 infa2dbt git-push -p ./output/dbt_project \
     --remote-url https://github.com/org/repo.git \
     -b main -m "Initial migration"
 
-# 8. (Optional) Schedule recurring execution
+# 9. (Optional) Schedule recurring execution
 infa2dbt deploy -p ./output/dbt_project \
     --mode schedule --cron "0 2 * * *"
 ```
