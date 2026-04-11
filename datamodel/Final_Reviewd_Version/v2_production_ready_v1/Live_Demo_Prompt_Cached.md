@@ -26,31 +26,40 @@
 
 ---
 
-I want to run a clean end-to-end pipeline for the DIM_INPUT directory using the infa2dbt framework. This uses REAL source data in `DIM_EQUIPMENT_SOURCES` schema (NOT MOCK_SOURCES). Execute all 11 steps sequentially and stop if any step fails with unrecoverable errors.
+I want to run a clean end-to-end pipeline for the DIM_INPUT directory using the infa2dbt framework. This uses REAL source data in `DIM_EQUIPMENT_SOURCES` schema (NOT MOCK_SOURCES). Execute all 14 steps (0-13) sequentially and stop if any step fails with unrecoverable errors.
 
 **IMPORTANT: This is a CACHE-ENABLED run.** The convert step should read from cache if available. Do NOT use the `--no-cache` flag. If cache is empty (first run), it will call the LLM and populate cache automatically.
 
 **IMPORTANT NOTES (learned from prior runs):**
 - All `python3 -m informatica_to_dbt.cli` commands MUST be prefixed with `PYTHONPATH=""` (Python 3.12/3.13 site-packages conflict with lxml)
 - SKIP local dbt compile/validate — there is a known version conflict between local dbt-fusion v2.0 (`accepted_values` requires `arguments:` format) and Snowflake native dbt 1.9.4 (uses old `values:` format). The YAML files are correct for the deployment target (Snowflake native dbt 1.9.4). Deploy directly.
-- When suspending Snowflake TASKs: suspend ROOT task first, then child tasks (opposite of resume order)
-- When resuming Snowflake TASKs: resume CHILD tasks first, then ROOT task
+- When suspending Snowflake TASKs: suspend CHILD task first, then ROOT task (child depends on root)
+- When dropping Snowflake TASKs: drop CHILD task first, then ROOT task (same dependency reason)
+- When creating Snowflake TASKs: create ROOT task first, then CHILD task (AFTER clause references root)
+- When resuming Snowflake TASKs: resume CHILD task first, then ROOT task
 - Use `--schema-source snowflake` for the discover command (NOT `--source-schema`)
 - The `--source-schema` flag is for the convert command only
+- `snow dbt deploy` syntax: `snow dbt deploy NAME --source DIR --profiles-dir DIR --force` (do NOT pass `-c`, `--database`, or `--schema` — these come from `config.toml`)
+- `snow dbt execute` syntax: `snow dbt execute NAME run|test` (same — no `-c`, `--database`, or `--schema` needed)
+- `EXECUTE DBT PROJECT` uses the short project name (e.g., `DIM_EQUIPMENT_CLEAN`), NOT the fully-qualified name
 
 ### Step 0: CLEANUP
 ```bash
 # 0a. Suspend and drop any existing Snowflake TASKs (if they exist)
-# Suspend root FIRST, then child
-ALTER TASK TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_DAILY_RUN SUSPEND;
+# Suspend CHILD first, then ROOT (child depends on root via AFTER clause)
 ALTER TASK TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_DAILY_TEST SUSPEND;
+ALTER TASK TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_DAILY_RUN SUSPEND;
+# Drop CHILD first, then ROOT (same reason — can't drop root while child references it)
 DROP TASK IF EXISTS TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_DAILY_TEST;
 DROP TASK IF EXISTS TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_DAILY_RUN;
 
-# 0b. Delete old output directory
+# 0b. Drop existing dbt project (if it exists)
+DROP DBT PROJECT IF EXISTS TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_CLEAN;
+
+# 0c. Delete old output directory
 rm -rf dim_output_demo
 
-# 0c. Ensure DIM_EQUIPMENT table exists in source schema (for SCD Type 2 self-referencing)
+# 0d. Ensure DIM_EQUIPMENT table exists in source schema (for SCD Type 2 self-referencing)
 # If it doesn't exist, create it from the target table:
 # CREATE TABLE TPC_DI_RAW_DATA.DIM_EQUIPMENT_SOURCES.DIM_EQUIPMENT AS
 #   SELECT * FROM TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT;
@@ -111,28 +120,20 @@ cp profiles.yml dim_output_demo/profiles.yml
 ```bash
 snow dbt deploy DIM_EQUIPMENT_CLEAN \
   --source dim_output_demo \
-  -c myconnection \
-  --database TPC_DI_RAW_DATA \
-  --schema INFORMATICA_TO_DBT \
+  --profiles-dir dim_output_demo \
   --force
 ```
 **Expected**: `DIM_EQUIPMENT_CLEAN successfully created.` (~18-21 files copied)
 
 ### Step 7: RUN — Execute dbt models
 ```bash
-snow dbt execute -c myconnection \
-  --database TPC_DI_RAW_DATA \
-  --schema INFORMATICA_TO_DBT \
-  DIM_EQUIPMENT_CLEAN run
+snow dbt execute DIM_EQUIPMENT_CLEAN run
 ```
 **Expected**: `PASS=12 WARN=0 ERROR=0 SKIP=0` (10 views + 2 incremental models). Model count is typically 12.
 
 ### Step 8: TEST — Run dbt tests
 ```bash
-snow dbt execute -c myconnection \
-  --database TPC_DI_RAW_DATA \
-  --schema INFORMATICA_TO_DBT \
-  DIM_EQUIPMENT_CLEAN test
+snow dbt execute DIM_EQUIPMENT_CLEAN test
 ```
 **Expected**: `PASS=55 WARN=0 ERROR=0 SKIP=0` (test count may vary 50-56 depending on LLM generation and inspect fixes)
 
@@ -161,33 +162,71 @@ If any models or tests fail:
 - Truncated `_marts__schema.yml` with `name:` having no value -> complete the file with remaining column definitions
 - Unquoted Jinja `var()` rendering as bare identifier -> wrap in single quotes
 
-### Step 10: SCHEDULE — Create daily Snowflake TASKs
+### Step 10: RECONCILE — Validate source-to-target data accuracy
+```bash
+PYTHONPATH="" python3 -m informatica_to_dbt.cli reconcile \
+  --source-database TPC_DI_RAW_DATA \
+  --source-schema DIM_EQUIPMENT_SOURCES \
+  --target-database TPC_DI_RAW_DATA \
+  --target-schema INFORMATICA_TO_DBT \
+  --layers L1,L2,L3 \
+  --output ./recon_reports \
+  --format both
+```
+**Expected**: L1 (schema match), L2 (row counts match), L3 (aggregate checks pass). Generates HTML + JSON report in `./recon_reports/`.
+
+**Note**: Use `--layers all` for full 6-layer validation (adds L4 hash, L5 row diff, L6 business rules — slower). L1-L3 is sufficient for a demo.
+
+### Step 11: REPORT — Generate EWI assessment report
+```bash
+PYTHONPATH="" python3 -m informatica_to_dbt.cli report \
+  --project-dir dim_output_demo \
+  --output ./reports \
+  --format both
+```
+**Expected**: HTML + JSON report with conversion quality scores, transformation coverage, errors/warnings/info summary.
+
+### Step 12: SCHEDULE — Create daily Snowflake TASKs
 ```sql
--- Root task: dbt run at 6 AM UTC daily
+-- Root task: dbt run at 6 AM ET daily
 CREATE OR REPLACE TASK TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_DAILY_RUN
   WAREHOUSE = SMALL_WH
-  SCHEDULE = 'USING CRON 0 6 * * * UTC'
-  COMMENT = 'Daily dbt run for DIM_EQUIPMENT_CLEAN at 6 AM UTC'
+  SCHEDULE = 'USING CRON 0 6 * * * America/New_York'
+  COMMENT = 'Daily dbt run for DIM_EQUIPMENT_CLEAN project'
 AS
-  EXECUTE DBT PROJECT TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_CLEAN ARGS = 'run';
+  EXECUTE DBT PROJECT DIM_EQUIPMENT_CLEAN ARGS = 'run';
 
 -- Child task: dbt test after run completes
+-- NOTE: COMMENT must come BEFORE the AFTER clause (Snowflake syntax requirement)
 CREATE OR REPLACE TASK TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_DAILY_TEST
   WAREHOUSE = SMALL_WH
-  COMMENT = 'Daily dbt test after run completes'
+  COMMENT = 'Daily dbt test for DIM_EQUIPMENT_CLEAN (runs after daily run)'
   AFTER TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_DAILY_RUN
 AS
-  EXECUTE DBT PROJECT TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_CLEAN ARGS = 'test';
+  EXECUTE DBT PROJECT DIM_EQUIPMENT_CLEAN ARGS = 'test';
 
 -- Resume: CHILD first, then ROOT
 ALTER TASK TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_DAILY_TEST RESUME;
 ALTER TASK TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_DAILY_RUN RESUME;
 ```
 
-### Step 11: REPORT + GIT
-1. Print a final pipeline summary table (step, action, result)
-2. `git add -A && git commit` with a descriptive message
-3. `git push` to all remotes
+### Step 13: GIT-PUSH (SKIP FOR DEMO)
+```bash
+# Framework CLI command (shown for capability demonstration — DO NOT execute during demo):
+# PYTHONPATH="" python3 -m informatica_to_dbt.cli git-push \
+#   --project dim_output_demo \
+#   --remote origin \
+#   --branch feature/dim-equipment \
+#   --message "Add DIM_EQUIPMENT dbt project from Informatica conversion"
+```
+**SKIP**: Do NOT git push during a demo run. This step shows that the framework supports automated git commit+push as the final pipeline step. In production, this would version-control the generated dbt project.
+
+### Final: PIPELINE SUMMARY
+Print a summary table showing all 14 steps with their status (step number, name, CLI command used, result). This demonstrates the complete end-to-end framework pipeline:
+
+```
+discover → convert → inspect → validate → deploy → run → test → fix → reconcile → report → schedule → git-push
+```
 
 ---
 
