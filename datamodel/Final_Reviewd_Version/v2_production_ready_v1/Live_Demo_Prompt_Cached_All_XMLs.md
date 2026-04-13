@@ -1,6 +1,6 @@
 # Live Demo Prompt — Cache-Based End-to-End Pipeline (All 8 XMLs)
 
-**Tested**: 2026-04-10 | **Result**: 33/33 models PASS, 171/171 tests PASS
+**Tested**: 2026-04-11 | **Result**: 33/33 models PASS, 170/170 tests PASS
 **Input**: `all_xmls/` (8 XML files)
 **dbt Project**: `ALL_XMLS_TEST`
 **Source Schema**: `MOCK_SOURCES` (35 tables with synthetic data)
@@ -48,8 +48,10 @@ I want to run a clean end-to-end pipeline for ALL 8 XMLs in the `all_xmls/` dire
 **IMPORTANT NOTES (learned from prior runs):**
 - All `python3 -m informatica_to_dbt.cli` commands MUST be prefixed with `PYTHONPATH=""` (Python 3.12/3.13 site-packages conflict with lxml)
 - SKIP local dbt compile/validate — there is a known version conflict between local dbt-fusion v2.0 (`accepted_values` requires `arguments:` format) and Snowflake native dbt 1.9.4 (uses old `values:` format). The YAML files are correct for the deployment target (Snowflake native dbt 1.9.4). Deploy directly.
-- When suspending Snowflake TASKs: suspend ROOT task first, then child tasks (opposite of resume order)
-- When resuming Snowflake TASKs: resume CHILD tasks first, then ROOT task
+- When suspending Snowflake TASKs: suspend ROOT task first, then CHILD task (root must be suspended before any child can be modified)
+- When dropping Snowflake TASKs: drop CHILD task first, then ROOT task (same dependency reason)
+- When creating Snowflake TASKs: create ROOT task first, then CHILD task (AFTER clause references root)
+- When resuming Snowflake TASKs: resume CHILD task first, then ROOT task
 - Use `--schema-source snowflake` for the discover command (NOT `--source-schema`)
 - The `--source-schema MOCK_SOURCES` flag is for the convert command only
 - `snow dbt deploy` syntax: `snow dbt deploy ALL_XMLS_TEST --source DIR --profiles-dir DIR --force` (NOT `--project`)
@@ -61,13 +63,17 @@ I want to run a clean end-to-end pipeline for ALL 8 XMLs in the `all_xmls/` dire
 ### Step 0: CLEANUP
 ```bash
 # 0a. Suspend and drop any existing Snowflake TASKs (if they exist)
-# Suspend root FIRST, then child
+# Suspend ROOT first, then CHILD (root must be suspended before any child can be modified)
 ALTER TASK TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.ALL_XMLS_TEST_DAILY_RUN SUSPEND;
 ALTER TASK TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.ALL_XMLS_TEST_DAILY_TEST SUSPEND;
+# Drop CHILD first, then ROOT (same reason — can't drop root while child references it)
 DROP TASK IF EXISTS TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.ALL_XMLS_TEST_DAILY_TEST;
 DROP TASK IF EXISTS TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.ALL_XMLS_TEST_DAILY_RUN;
 
-# 0b. Delete old output directory
+# 0b. Drop existing dbt project (if it exists)
+DROP DBT PROJECT IF EXISTS TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.ALL_XMLS_TEST;
+
+# 0c. Delete old output directory
 rm -rf all_xmls_output
 ```
 
@@ -121,9 +127,13 @@ Verify and fix these known LLM generation issues:
 
 7. **`{{ this }}` self-reference in fct_zj_journals**: The model may LEFT JOIN against itself (`{{ this }}`), which fails on first run when the table doesn't exist. Remove the self-reference and make it a simple SELECT from upstream `int_journals_filtered`.
 
-8. **Missing `out_flag` in int_journal_base output**: The model computes `out_flag` in a CTE but the final explicit column list may not include it. The test schema expects `out_flag` to exist in the output. Add `out_flag,` to the final CTE's SELECT list if missing.
+8. **Hallucinated `out_flag` test in int_journal_base schema**: The LLM generates an `accepted_values` test for column `out_flag` in `m_BL_FF_ZJ_JOURNALS/intermediate/_int__schema.yml`, but the `int_journal_base` model does NOT output an `out_flag` column. The test will fail with `invalid identifier 'OUT_FLAG'`. **Remove the entire `out_flag` entry** (name, description, and tests block) from the schema YAML.
 
 9. **All `_sources.yml` schema references**: Every `_sources.yml` file across all 8 mappings must have `schema: MOCK_SOURCES`. Verify this after convert.
+
+10. **Hallucinated `icist` accepted_values**: In `m_BL_FF_ZJ_JOURNALS_STG/marts/_marts__schema.yml`, the LLM generates `accepted_values` for `f0011_icist` as `['A', 'P', 'U', 'E']`. The actual F0011.ICIST column in MOCK_SOURCES contains `'I'` (inactive status). Add `'I'` to the list: `['A', 'I', 'P', 'U', 'E']`.
+
+11. **Hallucinated `glpost` accepted_values**: In the same `_marts__schema.yml`, the LLM generates `accepted_values` for `f0911_glpost` as `['Y', 'N', '']`. The actual F0911.GLPOST column contains `'P'` (posted). Replace with: `['P', 'U', 'Y', 'N', '']`.
 
 ### Step 4: COPY profiles.yml
 ```bash
@@ -154,7 +164,7 @@ If errors occur, read the error messages, fix the model SQL locally in `all_xmls
 ```bash
 snow dbt execute ALL_XMLS_TEST test
 ```
-**Expected**: `PASS=171 WARN=0 ERROR=0 SKIP=0`
+**Expected**: `PASS=170 WARN=0 ERROR=0 SKIP=0`
 
 ### Step 9: FIX — Fix mock data if tests fail
 If tests fail due to mock data having invalid domain values (T1/T2/T3 placeholders instead of real domain values), fix the MOCK_SOURCES data. **Do NOT relax or remove the tests.**
@@ -187,24 +197,24 @@ snow dbt execute ALL_XMLS_TEST test
 
 ### Step 10: SCHEDULE — Create daily Snowflake TASKs
 ```sql
--- Root task: dbt run at 7 AM UTC daily
+-- Root task: dbt run at 6 AM ET daily
 CREATE OR REPLACE TASK TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.ALL_XMLS_TEST_DAILY_RUN
   WAREHOUSE = SMALL_WH
-  SCHEDULE = 'USING CRON 0 7 * * * UTC'
+  SCHEDULE = 'USING CRON 0 6 * * * America/New_York'
   COMMENT = 'Daily dbt run for ALL_XMLS_TEST project (8 Informatica mappings)'
 AS
-  EXECUTE DBT PROJECT TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.ALL_XMLS_TEST
-    ARGS = 'run';
+  EXECUTE DBT PROJECT ALL_XMLS_TEST ARGS = 'run';
 
 -- Child task: dbt test after run completes
+-- NOTE: COMMENT must come BEFORE the AFTER clause (Snowflake syntax requirement)
 CREATE OR REPLACE TASK TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.ALL_XMLS_TEST_DAILY_TEST
   WAREHOUSE = SMALL_WH
+  COMMENT = 'Daily dbt test for ALL_XMLS_TEST project (runs after daily run)'
   AFTER TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.ALL_XMLS_TEST_DAILY_RUN
 AS
-  EXECUTE DBT PROJECT TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.ALL_XMLS_TEST
-    ARGS = 'test';
+  EXECUTE DBT PROJECT ALL_XMLS_TEST ARGS = 'test';
 
--- Resume: CHILD first, then ROOT
+-- Resume: CHILD first, then ROOT (order matters!)
 ALTER TASK TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.ALL_XMLS_TEST_DAILY_TEST RESUME;
 ALTER TASK TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.ALL_XMLS_TEST_DAILY_RUN RESUME;
 ```
@@ -249,4 +259,4 @@ PYTHONPATH="" python3 -m informatica_to_dbt.cli cache clear
 | XMLs | 8 files in `all_xmls/` directory |
 | Mappings | 8 (DIRECT x5, STAGED x1, LAYERED x1, COMPLEX x1) |
 | Expected models | 33 (28 views + 4 tables + 1 incremental) |
-| Expected tests | 171 |
+| Expected tests | 170 |

@@ -335,7 +335,7 @@ XML File
 ### What does the Prompt Builder do?
 
 It constructs the message sent to the AI (LLM). It has three parts:
-1. **System prompt** (~500 lines) — Rules for generating dbt code: naming conventions, function mappings (50+ Informatica→Snowflake translations), materialization rules, anti-patterns, few-shot examples
+1. **System prompt** (~500 lines) — Rules for generating dbt code: naming conventions, 57 conversion rules (Informatica→Snowflake function translations), materialization rules, anti-patterns, few-shot examples
 2. **Strategy instructions** — Tells the LLM how many layers to generate (DIRECT=1, STAGED=2, LAYERED=3, COMPLEX=full project)
 3. **User prompt** — The serialized mapping chunk (XML metadata in structured text format)
 
@@ -431,7 +431,7 @@ Skills are specialized knowledge files that Cortex Code loads automatically when
 
 | Skill | What It Knows | When It Activates |
 |-------|-------------|------------------|
-| **informatica-xml-patterns** | All 33+ Informatica transformation types and their dbt equivalents, 50+ function mappings, XML structure patterns | When parsing or troubleshooting Informatica XML conversions |
+| **informatica-xml-patterns** | All 33+ Informatica transformation types and their dbt equivalents, 60+ function mappings, XML structure patterns | When parsing or troubleshooting Informatica XML conversions |
 | **scd-type2-patterns** | SCD Type 2 implementation patterns — dbt snapshots, incremental merge, effective/expiry dates, history tracking | When converting Update Strategy / SCD transformations |
 | **snowflake-dbt-conventions** | dbt naming conventions, materialization rules, schema.yml structure, Snowflake SQL gotchas, test coverage requirements | When reviewing or validating generated dbt code |
 
@@ -494,6 +494,19 @@ A: Yes. The generated dbt project is standard dbt — edit any file. If you re-r
 
 **Q: How do I schedule the dbt project to run daily on Snowflake?**
 A: Either use `infa2dbt deploy --mode schedule --cron "0 7 * * *"`, or manually create Snowflake TASKs with `EXECUTE DBT PROJECT` commands (as shown in the demo prompts).
+
+---
+
+## Production Hardening (Phase 1)
+
+| Hardening | Component | What It Does |
+|-----------|-----------|-------------|
+| **Strip-and-Restore** | Post-Processor | Protects string literals, comments, and Jinja blocks from regex corruption by replacing them with `\x00PHn\x00` placeholders before transformations, then restoring after |
+| **XXE Mitigation** | XML Parser | `resolve_entities=False` (lxml) + DOCTYPE stripping (stdlib) prevents XML External Entity attacks |
+| **Prompt Injection Defense** | Prompt Builder | `_sanitize_xml_content()` strips control characters and escape patterns from XML before sending to LLM |
+| **Defensive Cache Loading** | Cache | All `json.load()` calls wrapped in try/except — corrupted cache entries are skipped, not fatal |
+| **Truncation Detection** | Response Parser | 4-check system detects incomplete LLM output; orchestrator auto-retries with higher token limit |
+| **Enhanced Error Logging** | XML Parser | lxml `error_log` entries captured at WARNING level with line numbers for easier debugging |
 
 ---
 

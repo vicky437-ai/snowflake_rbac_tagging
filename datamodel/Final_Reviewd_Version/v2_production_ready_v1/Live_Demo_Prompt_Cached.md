@@ -33,7 +33,7 @@ I want to run a clean end-to-end pipeline for the DIM_INPUT directory using the 
 **IMPORTANT NOTES (learned from prior runs):**
 - All `python3 -m informatica_to_dbt.cli` commands MUST be prefixed with `PYTHONPATH=""` (Python 3.12/3.13 site-packages conflict with lxml)
 - SKIP local dbt compile/validate — there is a known version conflict between local dbt-fusion v2.0 (`accepted_values` requires `arguments:` format) and Snowflake native dbt 1.9.4 (uses old `values:` format). The YAML files are correct for the deployment target (Snowflake native dbt 1.9.4). Deploy directly.
-- When suspending Snowflake TASKs: suspend CHILD task first, then ROOT task (child depends on root)
+- When suspending Snowflake TASKs: suspend ROOT task first, then CHILD task (root must be suspended before any child can be modified)
 - When dropping Snowflake TASKs: drop CHILD task first, then ROOT task (same dependency reason)
 - When creating Snowflake TASKs: create ROOT task first, then CHILD task (AFTER clause references root)
 - When resuming Snowflake TASKs: resume CHILD task first, then ROOT task
@@ -46,9 +46,9 @@ I want to run a clean end-to-end pipeline for the DIM_INPUT directory using the 
 ### Step 0: CLEANUP
 ```bash
 # 0a. Suspend and drop any existing Snowflake TASKs (if they exist)
-# Suspend CHILD first, then ROOT (child depends on root via AFTER clause)
-ALTER TASK TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_DAILY_TEST SUSPEND;
+# Suspend ROOT first, then CHILD (root must be suspended before any child can be modified)
 ALTER TASK TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_DAILY_RUN SUSPEND;
+ALTER TASK TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_DAILY_TEST SUSPEND;
 # Drop CHILD first, then ROOT (same reason — can't drop root while child references it)
 DROP TASK IF EXISTS TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_DAILY_TEST;
 DROP TASK IF EXISTS TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_DAILY_RUN;
