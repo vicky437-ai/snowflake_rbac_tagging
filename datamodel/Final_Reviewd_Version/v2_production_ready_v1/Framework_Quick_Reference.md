@@ -75,8 +75,8 @@
 ### Execution Order
 
 ```
-discover → convert → validate → deploy → reconcile → report → git-push
-    1          2          3         4          5          6         7
+discover → convert → inspect → validate → deploy → run → test → fix → reconcile → report → schedule → git-push
+    1          2         3          4         5       6      7      8        9          10        11         12
 ```
 
 You don't have to run all of them. The minimum is: `convert` → `deploy`. Everything else is optional but recommended.
@@ -114,6 +114,7 @@ infa2dbt convert \
   --connection myconnection \
   --source-schema MOCK_SOURCES \
   --log-level INFO \
+  --log-file conversion.log \
   --no-cache
 ```
 | Option | Required | What it does |
@@ -128,6 +129,7 @@ infa2dbt convert \
 | `--log-level` | No | `DEBUG`, `INFO`, `WARNING`, or `ERROR` |
 | `--no-cache` | No | Force fresh LLM generation (skip cache) |
 | `--clear-cache` | No | Clear all cached entries before running |
+| `--log-file` | No | Write log output to specified file (in addition to console) |
 
 ### 3. validate
 ```bash
@@ -309,7 +311,7 @@ XML File
 
 ---
 
-## The 14 Internal Packages
+## The 15 Packages (14 Sub-Packages + Root)
 
 | Package | Files | What It Does | When It Runs |
 |---------|-------|-------------|-------------|
@@ -518,7 +520,7 @@ A: Either use `infa2dbt deploy --mode schedule --cron "0 7 * * *"`, or manually 
 | Fallback Model | `claude-4-opus` | Model escalation target |
 | Max Context Tokens | 80,000 | LLM context window limit |
 | Chunk Token Limit | 75,000 | Max tokens per chunk sent to LLM |
-| LLM Temperature | 0.1 | Low = deterministic output |
+| LLM Temperature | 0.0 | Fully deterministic output (configurable via `INFA_DBT_LLM_TEMPERATURE` env var) |
 | Self-Heal Attempts | 2 | Max correction rounds per mapping |
 | Max Retries | 3 | API call retries |
 | Rate Limit | 3 calls/min | LLM rate limiting |

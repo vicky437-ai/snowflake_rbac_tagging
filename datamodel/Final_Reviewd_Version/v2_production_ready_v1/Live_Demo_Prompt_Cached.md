@@ -1,9 +1,11 @@
 # Live Demo Prompt — Cache-Based End-to-End Pipeline
 
-**Tested**: 2026-04-07 | **Result**: 12/12 models PASS, 55/55 tests PASS
+**Tested**: 2026-04-15 | **Result**: 17/17 models PASS, 62/62 tests PASS
 **Input**: `DIM_INPUT/s_m_INCR_DM_DIM_EQUIPMENT.XML`
 **Source Schema**: `DIM_EQUIPMENT_SOURCES` (11 tables, 65K+ rows of real data)
 **Cache**: Enabled (first run populates cache ~6 min; subsequent runs read from cache in seconds)
+**Logging**: Enabled — full debug log captured to `dim_output_demo/logs/convert.log`
+**Current cache key**: `142847f6a3b3` (25 files, score 99) — will HIT on next run
 
 ---
 
@@ -26,6 +28,8 @@
 
 ---
 
+**Working directory**: `cd /Users/vicky/informatica-to-dbt` (all relative paths below are relative to this directory)
+
 I want to run a clean end-to-end pipeline for the DIM_INPUT directory using the infa2dbt framework. This uses REAL source data in `DIM_EQUIPMENT_SOURCES` schema (NOT MOCK_SOURCES). Execute all 14 steps (0-13) sequentially and stop if any step fails with unrecoverable errors.
 
 **IMPORTANT: This is a CACHE-ENABLED run.** The convert step should read from cache if available. Do NOT use the `--no-cache` flag. If cache is empty (first run), it will call the LLM and populate cache automatically.
@@ -46,12 +50,13 @@ I want to run a clean end-to-end pipeline for the DIM_INPUT directory using the 
 ### Step 0: CLEANUP
 ```bash
 # 0a. Suspend and drop any existing Snowflake TASKs (if they exist)
+# NOTE: The SUSPEND commands may fail on first run if tasks don't exist — that's OK, continue to the DROP commands.
 # Suspend ROOT first, then CHILD (root must be suspended before any child can be modified)
-ALTER TASK TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_DAILY_RUN SUSPEND;
-ALTER TASK TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_DAILY_TEST SUSPEND;
+ALTER TASK TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_CLEAN_RUN_TASK SUSPEND;
+ALTER TASK TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_CLEAN_TEST_TASK SUSPEND;
 # Drop CHILD first, then ROOT (same reason — can't drop root while child references it)
-DROP TASK IF EXISTS TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_DAILY_TEST;
-DROP TASK IF EXISTS TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_DAILY_RUN;
+DROP TASK IF EXISTS TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_CLEAN_TEST_TASK;
+DROP TASK IF EXISTS TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_CLEAN_RUN_TASK;
 
 # 0b. Drop existing dbt project (if it exists)
 DROP DBT PROJECT IF EXISTS TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_CLEAN;
@@ -64,6 +69,34 @@ rm -rf dim_output_demo
 # CREATE TABLE TPC_DI_RAW_DATA.DIM_EQUIPMENT_SOURCES.DIM_EQUIPMENT AS
 #   SELECT * FROM TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT;
 # If the target doesn't exist either, create an empty shell matching the expected schema.
+
+# 0e. CRITICAL: Refresh source data timestamps for incremental filters
+# The pipeline uses EDW_UPDATE_TMS to filter recent rows. If source data is stale,
+# the incremental models will process 0 rows. Update 500 rows in each source table:
+```
+```sql
+-- Run these IMMEDIATELY before the demo (especially important for the 1-hour window):
+UPDATE TPC_DI_RAW_DATA.DIM_EQUIPMENT_SOURCES.EQPMNT_AAR_BASE
+SET EDW_UPDATE_TMS = CURRENT_TIMESTAMP()
+WHERE EQPMNT_ID IN (
+    SELECT EQPMNT_ID FROM TPC_DI_RAW_DATA.DIM_EQUIPMENT_SOURCES.EQPMNT_AAR_BASE LIMIT 500
+);
+
+UPDATE TPC_DI_RAW_DATA.DIM_EQUIPMENT_SOURCES.EQPMNT_NON_RGSTRD
+SET EDW_UPDATE_TMS = CURRENT_TIMESTAMP()
+WHERE EQPMNT_ID IN (
+    SELECT EQPMNT_ID FROM TPC_DI_RAW_DATA.DIM_EQUIPMENT_SOURCES.EQPMNT_NON_RGSTRD LIMIT 500
+);
+
+-- VERIFY both filters will find rows:
+SELECT 'AAR_BASE (24h)' AS filter, COUNT(*) AS rows
+FROM TPC_DI_RAW_DATA.DIM_EQUIPMENT_SOURCES.EQPMNT_AAR_BASE
+WHERE EDW_UPDATE_TMS > DATEADD('DAY', -1, CURRENT_TIMESTAMP())
+UNION ALL
+SELECT 'NON_RGSTRD (1h)', COUNT(*)
+FROM TPC_DI_RAW_DATA.DIM_EQUIPMENT_SOURCES.EQPMNT_NON_RGSTRD
+WHERE EDW_UPDATE_TMS > DATEADD('HOUR', -1, CURRENT_TIMESTAMP());
+-- Both should return 500. If NON_RGSTRD returns 0, re-run the UPDATE above.
 ```
 
 ### Step 1: DISCOVER — XML inventory + Snowflake schema validation
@@ -81,24 +114,26 @@ PYTHONPATH="" python3 -m informatica_to_dbt.cli discover \
 PYTHONPATH="" python3 -m informatica_to_dbt.cli convert \
   --input DIM_INPUT \
   --output dim_output_demo \
-  --source-schema DIM_EQUIPMENT_SOURCES
+  --source-schema DIM_EQUIPMENT_SOURCES \
+  --log-level DEBUG \
+  --log-file dim_output_demo/logs/convert.log
 ```
-**Note**: No `--no-cache` flag. If cache exists, output appears in seconds (cache HIT). If not, LLM generates fresh output (~6 min) and stores it in cache for next time.
+**Note**: No `--no-cache` flag. If cache exists, output appears in seconds (cache HIT). If not, LLM generates fresh output (~6 min) and stores it in cache for next time. Full debug log (including LLM prompts, cache lookups, timing) is written to `dim_output_demo/logs/convert.log`.
 
-**Expected**: ~18 files generated. Quality score 100/100. If cache HIT, you'll see "Cache HIT for mapping" in the logs.
+**Expected**: 25 files generated. Quality score 99/100. If cache HIT (expected), you'll see "Cache HIT for mapping" in the logs and output appears in seconds. Current cache key: `142847f6a3b3`.
 
 ### Step 3: INSPECT — Verify and fix generated models
 Verify and fix these known LLM generation issues:
 
 1. **Check `_sources.yml`**: Must use `schema: DIM_EQUIPMENT_SOURCES` (uppercase) and source name `dim_equipment_sources` (lowercase). Must list all 11 tables. If it says `MOCK_SOURCES` or `mock_sources`, fix it.
 
-2. **Check staging models for EDW columns**: `stg_eqpmnt_aar_base.sql` and `stg_eqpmnt_non_rgstrd.sql` must NOT reference `EDW_CREATE_USER`, `EDW_CREATE_TMS`, `EDW_UPDATE_USER`, or `EDW_UPDATE_TMS` — these columns only exist on the target DIM_EQUIPMENT table, not on the source tables EQPMNT_AAR_BASE or EQPMNT_NON_RGSTRD. Remove them if present.
+2. **Verify staging models include EDW columns**: `stg_eqpmnt_aar_base.sql` and `stg_eqpmnt_non_rgstrd.sql` should reference `EDW_UPDATE_TMS` (and optionally `EDW_CREATE_USER`, `EDW_CREATE_TMS`, `EDW_UPDATE_USER`). These columns DO exist on both source tables `EQPMNT_AAR_BASE` and `EQPMNT_NON_RGSTRD`. If the LLM omits them, add them — the incremental filter models depend on `EDW_UPDATE_TMS`.
 
-3. **Check WHERE clauses in intermediate models**: Any WHERE clause filtering on `EDW_UPDATE_TMS` should use `RECORD_UPDATE_TMS` instead (the source tables use `RECORD_UPDATE_TMS`, not `EDW_UPDATE_TMS`).
+3. **Check WHERE clauses in intermediate filter models**: The incremental filters use `EDW_UPDATE_TMS` — this is CORRECT. Both source tables have this column. Note the two filter models use different windows: `int_aar_base_filtered.sql` uses `DATEADD('DAY', -1, ...)` (24 hours) and `int_non_registered_filtered.sql` uses `DATEADD('HOUR', -1, ...)` (1 hour). Both are valid; the 1-hour window is stricter.
 
 4. **Check for ambiguous column references**: After JOINs, columns like `MARK_CD`, `EQPUN_NBR`, `RECORD_CREATE_TMS` must be qualified with table aliases (e.g., `n.MARK_CD` not just `MARK_CD`).
 
-5. **Check `STATUS_CD` accepted_values**: Real data has: DIM_EQUIPMENT uses `['AC', 'IN']`, EQPMNT_AAR_BASE uses `['A', 'I', 'S', 'R']`. Update any `STATUS_CD` accepted_values tests to include `['AC', 'IN', 'A', 'I', 'S', 'R']`.
+5. **Check `STATUS_CD` accepted_values in `_marts__schema.yml`**: Real data has: DIM_EQUIPMENT uses `['AC', 'IN']`, EQPMNT_AAR_BASE uses `['A', 'I', 'S', 'R']`. Update the `STATUS_CD` accepted_values test in `marts/_marts__schema.yml` to include `['AC', 'IN', 'A', 'I', 'S', 'R']`. The LLM typically generates `['A', 'I', 'D', 'R', 'S']` which is wrong.
 
 6. **Check schema YAML tests**: Ensure no test references a column that doesn't exist in the corresponding model (e.g., `I_U_FLG` test on a model that doesn't produce that column).
 
@@ -107,6 +142,8 @@ Verify and fix these known LLM generation issues:
 8. **Check Jinja `var()` quoting in soft delete model**: In `int_dim_equipment_soft_delete.sql`, the LLM sometimes generates `{{ var('repository_user_name', 'DBT_USER') }} AS EDW_UPDATE_USER` — this renders as a bare identifier, not a string. Fix to: `'{{ var("repository_user_name", "DBT_USER") }}' AS EDW_UPDATE_USER` (wrap in single quotes, switch inner quotes to double).
 
 9. **Verify `dim_equipment.sql`**: Should be materialized as `incremental` with `merge_update_columns`, containing 3 UNION ALL branches (insert/update/type2). Must not be truncated.
+
+10. **Check for duplicate column `I_U_FLG` in `int_equipment_final_gather.sql`**: The `final_transformations` CTE uses `d.*` from upstream, which includes an `I_U_FLG` placeholder column. The same CTE then recomputes `I_U_FLG` via a CASE expression, causing Snowflake error `002025 (42S21): duplicate column name 'I_U_FLG'`. **Fix**: Change `d.*` to `d.* EXCLUDE (I_U_FLG)` — this uses Snowflake's EXCLUDE syntax to drop the upstream placeholder while keeping the recomputed CASE expression. This is a known LLM generation issue.
 
 ### Step 4: COPY profiles.yml
 ```bash
@@ -123,19 +160,19 @@ snow dbt deploy DIM_EQUIPMENT_CLEAN \
   --profiles-dir dim_output_demo \
   --force
 ```
-**Expected**: `DIM_EQUIPMENT_CLEAN successfully created.` (~18-21 files copied)
+**Expected**: `DIM_EQUIPMENT_CLEAN successfully created.` (~25 files copied)
 
 ### Step 7: RUN — Execute dbt models
 ```bash
 snow dbt execute DIM_EQUIPMENT_CLEAN run
 ```
-**Expected**: `PASS=12 WARN=0 ERROR=0 SKIP=0` (10 views + 2 incremental models). Model count is typically 12.
+**Expected**: `PASS=17 WARN=0 ERROR=0 SKIP=0` (16 views + 1 incremental model).
 
 ### Step 8: TEST — Run dbt tests
 ```bash
 snow dbt execute DIM_EQUIPMENT_CLEAN test
 ```
-**Expected**: `PASS=55 WARN=0 ERROR=0 SKIP=0` (test count may vary 50-56 depending on LLM generation and inspect fixes)
+**Expected**: `PASS=62 WARN=0 ERROR=0 SKIP=0` (test count may vary 58-65 depending on LLM generation and inspect fixes)
 
 ### Step 9: FIX — Fix any failures
 If any models or tests fail:
@@ -154,60 +191,61 @@ If any models or tests fail:
 4. Re-run the failed step
 
 **Common issues to watch for:**
-- Staging models referencing EDW audit columns that don't exist on source tables -> remove them, use `RECORD_UPDATE_TMS` instead of `EDW_UPDATE_TMS` in WHERE clauses
-- Truncated model files -> reconstruct complete file from intermediate model column lists
+- Duplicate column `I_U_FLG` in `int_equipment_final_gather.sql` -> use `d.* EXCLUDE (I_U_FLG)` to drop upstream placeholder
+- Incremental filters returning 0 rows -> run data freshness UPDATE from Step 0e before dbt run
 - `accepted_values` test mismatches -> query actual data and update YAML
 - Ambiguous column names after JOINs -> qualify with table alias
 - Tests referencing columns not produced by the model -> remove the test
 - Truncated `_marts__schema.yml` with `name:` having no value -> complete the file with remaining column definitions
 - Unquoted Jinja `var()` rendering as bare identifier -> wrap in single quotes
+- Truncated model files -> reconstruct complete file from intermediate model column lists
 
 ### Step 10: RECONCILE — Validate source-to-target data accuracy
 ```bash
 PYTHONPATH="" python3 -m informatica_to_dbt.cli reconcile \
-  --source-database TPC_DI_RAW_DATA \
-  --source-schema DIM_EQUIPMENT_SOURCES \
-  --target-database TPC_DI_RAW_DATA \
-  --target-schema INFORMATICA_TO_DBT \
-  --layers L1,L2,L3 \
-  --output ./recon_reports \
+  -sd TPC_DI_RAW_DATA \
+  -ss DIM_EQUIPMENT_SOURCES \
+  -td TPC_DI_RAW_DATA \
+  -ts INFORMATICA_TO_DBT \
+  -l L1,L2,L3 \
+  -o ./recon_reports \
   --format both
 ```
-**Expected**: L1 (schema match), L2 (row counts match), L3 (aggregate checks pass). Generates HTML + JSON report in `./recon_reports/`.
+**Expected**: L1 (schema match), L2 (row counts match), L3 (aggregate checks pass). Generates HTML + JSON report in a timestamped subdirectory under `./recon_reports/` (e.g., `recon_reports/20260415_025139/`).
 
-**Note**: Use `--layers all` for full 6-layer validation (adds L4 hash, L5 row diff, L6 business rules — slower). L1-L3 is sufficient for a demo.
+**Note**: Use `-l all` for full 6-layer validation (adds L4 hash, L5 row diff, L6 business rules — slower). L1-L3 is sufficient for a demo.
 
 ### Step 11: REPORT — Generate EWI assessment report
 ```bash
 PYTHONPATH="" python3 -m informatica_to_dbt.cli report \
-  --project-dir dim_output_demo \
-  --output ./reports \
-  --format both
+  -p dim_output_demo \
+  -o ./recon_reports \
+  -f both
 ```
-**Expected**: HTML + JSON report with conversion quality scores, transformation coverage, errors/warnings/info summary.
+**Expected**: HTML + JSON report with conversion quality scores, transformation coverage, errors/warnings/info summary. Output writes directly to `./recon_reports/` (e.g., `recon_reports/ewi_assessment_report.html` and `.json`). Note: unlike `reconcile`, the `report` command does NOT create a timestamped subdirectory.
 
 ### Step 12: SCHEDULE — Create daily Snowflake TASKs
 ```sql
--- Root task: dbt run at 6 AM ET daily
-CREATE OR REPLACE TASK TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_DAILY_RUN
+-- Root task: dbt run at 6 AM UTC daily
+CREATE OR REPLACE TASK TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_CLEAN_RUN_TASK
   WAREHOUSE = SMALL_WH
-  SCHEDULE = 'USING CRON 0 6 * * * America/New_York'
-  COMMENT = 'Daily dbt run for DIM_EQUIPMENT_CLEAN project'
+  SCHEDULE = 'USING CRON 0 6 * * * UTC'
+  COMMENT = 'Daily dbt run for DIM_EQUIPMENT_CLEAN pipeline'
 AS
   EXECUTE DBT PROJECT DIM_EQUIPMENT_CLEAN ARGS = 'run';
 
 -- Child task: dbt test after run completes
 -- NOTE: COMMENT must come BEFORE the AFTER clause (Snowflake syntax requirement)
-CREATE OR REPLACE TASK TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_DAILY_TEST
+CREATE OR REPLACE TASK TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_CLEAN_TEST_TASK
   WAREHOUSE = SMALL_WH
-  COMMENT = 'Daily dbt test for DIM_EQUIPMENT_CLEAN (runs after daily run)'
-  AFTER TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_DAILY_RUN
+  COMMENT = 'Daily dbt test for DIM_EQUIPMENT_CLEAN pipeline (runs after run task)'
+  AFTER TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_CLEAN_RUN_TASK
 AS
   EXECUTE DBT PROJECT DIM_EQUIPMENT_CLEAN ARGS = 'test';
 
 -- Resume: CHILD first, then ROOT
-ALTER TASK TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_DAILY_TEST RESUME;
-ALTER TASK TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_DAILY_RUN RESUME;
+ALTER TASK TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_CLEAN_TEST_TASK RESUME;
+ALTER TASK TPC_DI_RAW_DATA.INFORMATICA_TO_DBT.DIM_EQUIPMENT_CLEAN_RUN_TASK RESUME;
 ```
 
 ### Step 13: GIT-PUSH (SKIP FOR DEMO)
@@ -260,3 +298,4 @@ PYTHONPATH="" python3 -m informatica_to_dbt.cli cache clear
 | Snowflake CLI | v3.16.0 |
 | Deploy project name | `DIM_EQUIPMENT_CLEAN` |
 | Cache location | `.infa2dbt/cache/` (never expires) |
+| Log file | `dim_output_demo/logs/convert.log` (DEBUG level) |

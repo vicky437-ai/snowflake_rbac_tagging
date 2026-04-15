@@ -5,7 +5,7 @@
 |-------|-------|
 | **Document Version** | 2.0 |
 | **Project** | Informatica-to-dbt Generic Migration Framework |
-| **Approach** | LLM-Powered (Snowflake Cortex) — SnowConvert AI-aligned design |
+| **Approach** | LLM-Powered (Snowflake Cortex)  |
 | **Target Platform** | Snowflake-Native dbt Projects |
 | **Current Status** | Framework Complete — CLI, conversion, validation, deployment, Git integration all operational |
 
@@ -49,8 +49,8 @@ Build a **generic, reusable framework** — similar in workflow to Snowflake's S
 | LLM Code Generator | Complete | Cortex-powered with chunking for large mappings, few-shot prompts, strategy-specific generation |
 | Self-Healing Loop | Complete | Validates output, sends errors back to LLM for correction (up to 2 attempts) |
 | Quality Scorer | Complete | Scores generated code 0-100 across 5 dimensions |
-| Validators | Complete | 9 SQL checks + YAML structure + project-level ref/DAG validation |
-| Post-Processor | Complete | Cleans Informatica residuals (IIF→IFF, ISNULL, etc.), 15+ pattern replacements |
+| Validators | Complete | 15 SQL checks + YAML structure + project-level ref/DAG validation |
+| Post-Processor | Complete | Cleans Informatica residuals (IIF→IFF, ISNULL, etc.), 30+ pattern fixes |
 | Project Merger | Complete | Consolidates individual mapping outputs into one unified dbt project |
 | CLI | Complete | Full `infa2dbt` CLI with convert, discover, report, validate, deploy, git-push, cache, version |
 | Git Integration | Complete | Built-in init, commit, push via `git-push` command |
@@ -150,7 +150,7 @@ flowchart LR
 
 2. **Auto-generated tests**: Tests are generated out of the box. SnowConvert generates zero tests — the user must write them manually.
 
-3. **Self-healing**: When the LLM makes a mistake, the framework catches it (via 9 SQL checks, YAML validation, project-level ref checks), sends the errors back to the LLM, and gets a corrected output. SnowConvert has no equivalent.
+3. **Self-healing**: When the LLM makes a mistake, the framework catches it (via 15 SQL checks, YAML validation, project-level ref checks), sends the errors back to the LLM, and gets a corrected output. SnowConvert has no equivalent.
 
 4. **Quality scoring**: Every generated mapping gets a 0-100 quality score across 5 dimensions, providing transparency into conversion quality.
 
@@ -660,6 +660,7 @@ infa2dbt cache clear --yes
 | `docs/CLI_Reference.md` | Full CLI command reference with all flags and examples |
 | `docs/Production_Runbook.md` | Setup guide for running the framework on a new machine |
 | `docs/Technical_Design_Document.md` | Technical deep-dive into parser, LLM generator, validators |
+| `docs/Consolidated_Guide.md` | End-to-end walkthrough covering setup, conversion, deployment, and execution |
 
 ---
 

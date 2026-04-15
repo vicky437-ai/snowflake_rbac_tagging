@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Document Version** | 1.0 |
+| **Document Version** | 2.0 |
 | **Date** | April 2026 |
 | **Subject** | Informatica-to-dbt migration framework comparison |
 | **Frameworks Compared** | Flowline (Infinite Lambda), SnowConvert AI for ETL (Snowflake), infa2dbt |
@@ -130,7 +130,7 @@ Informatica PowerCenter XML (Any mapping, any complexity)
 - **Output**: Single consolidated dbt project — all mappings merged with full cross-mapping `ref()` support
 - **Informatica support**: Comprehensive — 33+ transform types, 60+ functions, any complexity level
 - **Self-healing**: Automated error detection (14 SQL checks + YAML validation) with LLM correction loop (up to 2 attempts)
-- **Post-processing**: 28+ pattern fixes clean Informatica-specific syntax (IIF→IFF, NVL→COALESCE, ADD_TO_DATE→DATEADD, etc.)
+- **Post-processing**: 30+ pattern fixes clean Informatica-specific syntax (IIF→IFF, NVL→COALESCE, ADD_TO_DATE→DATEADD, etc.)
 - **Reconciliation**: 6-layer validation pyramid (schema, row count, aggregate, hash, row diff, business rules)
 
 ---
@@ -179,7 +179,7 @@ All three frameworks converge on the same target architecture. The differentiati
 | **Auto-generated dbt tests** | Unknown | No | **Yes (per-model: not_null, unique, accepted_values, relationships, accepted_range)** |
 | **Complexity scoring** | Unknown | Basic | **11-dimension, 0-100 scoring** |
 | **Quality scoring per mapping** | Unknown | None | **5-dimension, 0-100 scoring** |
-| **Post-processing (residual cleanup)** | Unknown | None | **28+ pattern fixes** |
+| **Post-processing (residual cleanup)** | Unknown | None | **30+ pattern fixes** |
 | **SQL static validation** | Unknown | None | **14 checks** |
 | **Token-aware chunking** | N/A | N/A | **Yes (handles 100K+ token mappings)** |
 | **Output caching (SHA-256)** | N/A | N/A | **Yes (deterministic re-runs)** |
@@ -226,7 +226,7 @@ All three frameworks converge on the same target architecture. The differentiati
 | **Transparency** | 11-dimension complexity scoring + 5-dimension quality scoring + EWI reports | Limited visibility into proprietary tooling | Basic EWI reports |
 | **Cost** | No consulting fees, no product license — only Cortex credits (~$0.50-2 per mapping) | Enterprise consulting fees | Product license |
 | **Self-service** | No vendor dependency — run anytime, anywhere, on any mapping | Requires consultant engagement | Self-service (limited Informatica) |
-| **Post-processing depth** | 28+ pattern fixes clean Informatica residuals that LLMs commonly leave behind | Unknown | No post-processing |
+| **Post-processing depth** | 30+ pattern fixes clean Informatica residuals that LLMs commonly leave behind | Unknown | No post-processing |
 | **Token-aware chunking** | Handles arbitrarily large mappings by splitting while preserving transformation chains | N/A | N/A |
 | **Output caching** | SHA-256 cache makes re-runs instant and deterministic — no wasted LLM calls | N/A | Inherently deterministic |
 | **Cross-mapping consolidation** | Single dbt project with full `ref()` support across all mappings | Yes (their tooling) | No (separate projects) |
@@ -339,13 +339,13 @@ infa2dbt's `discover` + complexity analyzer covers:
 | Testing & validation | 7/10 | 3/10 | **9/10** | Auto-generated tests + 6-layer reconciliation |
 | Self-healing | 5/10 | 0/10 | **8/10** | Only infa2dbt has automated correction loops |
 | Reconciliation | 7/10 | 0/10 | **9/10** | Most structured validation approach |
-| Enterprise readiness | **9/10** | 7/10 | 5/10 | Flowline has proven client logos and scale |
+| Enterprise readiness | **9/10** | 7/10 | 6/10 | Flowline has proven client logos and scale |
 | Change management | **9/10** | 2/10 | 1/10 | Flowline includes training and adoption |
 | Cost efficiency | 3/10 | 7/10 | **9/10** | infa2dbt has lowest cost (~$0.50-2/mapping) |
 | Self-service ability | 2/10 | 8/10 | **9/10** | No vendor dependency |
-| Proven scale | **9/10** | 7/10 | 4/10 | MACIF + AstraZeneca vs single demo mapping |
-| Documentation & transparency | 7/10 | 6/10 | **8/10** | Full scoring, EWI reports, quality metrics |
-| **Total** | **82/120** | **57/120** | **83/120** | |
+| Proven scale | **9/10** | 7/10 | 5/10 | MACIF + AstraZeneca vs 8 mappings, 4 projects, 73 models, 390 tests |
+| Documentation & transparency | 7/10 | 6/10 | **9/10** | Full scoring, EWI reports, quality metrics, 6 comprehensive docs |
+| **Total** | **82/120** | **57/120** | **86/120** | |
 
 ### 9.2 Positioning Summary
 
@@ -357,7 +357,7 @@ infa2dbt's `discover` + complexity analyzer covers:
            (82/120)       │
                           │
                           │         ★ infa2dbt
-                          │          (83/120)
+                          │          (86/120)
                           │
                           │
          SnowConvert ★    │
@@ -378,7 +378,7 @@ infa2dbt's `discover` + complexity analyzer covers:
 
 4. **infa2dbt's biggest advantage** is that it's the only framework where a single CLI command covers the entire pipeline from XML input to deployed, tested, scheduled, reconciled dbt project on Snowflake — with no vendor dependency, no consulting fees, and full transparency into every step.
 
-5. **infa2dbt's biggest gaps** are enterprise-scale proof points and change management. Flowline can cite MACIF (1600 models in 6 weeks) and AstraZeneca (multi-million TCO reduction). infa2dbt needs similar large-scale validation and the "ADOPT" phase (training, onboarding, stakeholder alignment) that enterprises expect.
+5. **infa2dbt's biggest gaps** are enterprise-scale proof points and change management. Flowline can cite MACIF (1600 models in 6 weeks) and AstraZeneca (multi-million TCO reduction). infa2dbt now has 8 mappings across 4 deployed Snowflake projects (73 models, 390 dbt tests, 827 pytest tests), but needs similar large-scale validation and the "ADOPT" phase (training, onboarding, stakeholder alignment) that enterprises expect.
 
 6. **The architecture is competitive.** infa2dbt aligns with the "Assisted" migration approach recommended by both dbt Labs and Flowline. The technical architecture matches or exceeds industry standards in most dimensions. The framework is closer to a **productized Flowline without the consulting overhead** than a SnowConvert competitor.
 
@@ -391,7 +391,7 @@ To close the gap with Flowline and establish infa2dbt as an enterprise-grade pro
 | 1 | Add SSIS (.dtsx) parser support | Flowline + SnowConvert (multi-ETL) |
 | 2 | Add `refactor` command for cloud-native optimization | Flowline ("better not just different") |
 | 3 | Build portfolio migration dashboard | Flowline (enterprise visibility) |
-| 4 | Run large-scale proof point (50+ mappings) | Flowline (proven scale) |
+| 4 | Run large-scale proof point (50+ mappings) — current: 8 mappings, 4 projects, 73 models, 390 tests | Flowline (proven scale) |
 | 5 | Add parallel conversion (`--parallel N`) | All (performance at scale) |
 | 6 | Create change management toolkit | Flowline (ADOPT phase) |
 

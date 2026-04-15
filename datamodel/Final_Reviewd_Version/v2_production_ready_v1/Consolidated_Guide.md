@@ -99,13 +99,13 @@ flowchart TB
 
     subgraph FRAMEWORK["infa2dbt Framework (Local Python)"]
         direction TB
-        PARSE["XML Parser\n30+ transform types"]
+        PARSE["XML Parser\n33+ transform types"]
         ANALYZE["Complexity Analyzer\n11-dimension scoring"]
         CACHE_CHK{{"Cache\nCheck"}}
         CHUNK["Token-Aware\nChunker"]
         GENERATE["LLM Code\nGenerator"]
 POSTPROC["Post-Processor\n30+ pattern fixes"]
-VALIDATE_S["Static Validator\n15 SQL checks"]
+VALIDATE_S["Static Validator\n14 SQL checks"]
         HEAL{{"Self-Healing\nLoop"}}
         SCORE["Quality Scorer\n5-dimension 0-100"]
         CACHE_ST["Cache Store\nSHA-256"]
@@ -242,7 +242,7 @@ flowchart TB
 
 ### 2.4 Pipeline Execution Order
 
-The 8-step pipeline mirrors an industrialized CI/CD workflow — convert, validate, deploy, execute, reconcile, version-control:
+The 14-step pipeline mirrors an industrialized CI/CD workflow — discover, convert, inspect, validate, deploy, run, test, fix, reconcile, report, schedule, git-push:
 
 ```mermaid
 flowchart LR
@@ -273,7 +273,7 @@ flowchart LR
 | Token-aware chunking | Local Python | No |
 | LLM code generation | Snowflake Cortex (`SNOWFLAKE.CORTEX.COMPLETE()`) | **Yes** |
 | Post-processing (30+ patterns) | Local Python | No |
-| Static validation (15 SQL checks) | Local Python | No |
+| Static validation (14 SQL checks) | Local Python | No |
 | Self-healing (LLM correction) | Snowflake Cortex | **Yes** |
 | Quality scoring (5 dimensions) | Local Python | No |
 | Output caching (SHA-256) | Local filesystem | No |
@@ -290,14 +290,14 @@ flowchart LR
 
 | Component | Status | What It Does |
 |-----------|--------|-------------|
-| XML Parser | Complete | Parses all Informatica PowerCenter XML elements — sources, targets, 30+ transform types, connectors, shortcuts |
+| XML Parser | Complete | Parses all Informatica PowerCenter XML elements — sources, targets, 33+ transform types, connectors, shortcuts |
 | Complexity Analyzer | Complete | Scores mappings 0-100 across 11 dimensions, selects conversion strategy (DIRECT / STAGED / LAYERED / COMPLEX) |
-| Transformation Registry | Complete | 30+ Informatica transform types mapped to dbt SQL patterns, 60+ function conversions |
+| Transformation Registry | Complete | 33+ Informatica transform types mapped to dbt SQL patterns, 60+ function conversions |
 | LLM Code Generator | Complete | Snowflake Cortex-powered with chunking for large mappings, few-shot prompts, strategy-specific instructions |
 | Self-Healing Loop | Complete | Validates output, sends errors back to LLM for correction (up to 2 attempts) |
 | Quality Scorer | Complete | Scores generated code 0-100 across 5 dimensions (file_structure, dbt_conventions, sql_syntax, function_conversion, yaml_quality) |
-| Validators | Complete | 15 SQL checks + YAML structure + project-level ref/DAG validation |
-| Post-Processor | Complete | Cleans Informatica residuals (IIF to IFF, ISNULL to IFNULL, etc.) — 30+ pattern fixes |
+| Validators | Complete | 14 SQL checks + YAML structure + project-level ref/DAG validation |
+| Post-Processor | Complete | Cleans Informatica residuals (IIF to IFF, NVL to COALESCE, etc.) — 30+ pattern fixes including strip-and-restore protection for string literals and Jinja blocks |
 | Project Merger | Complete | Consolidates individual mapping outputs into one unified dbt project with cross-mapping `ref()` |
 | CLI | Complete | Full `infa2dbt` CLI — convert, discover, report, validate, deploy, reconcile, git-push, cache, version |
 | Git Integration | Complete | Built-in init, commit, push via `git-push` command |
@@ -349,14 +349,14 @@ flowchart LR
 - **Engine**: LLM-powered (Snowflake Cortex) with comprehensive system prompts, few-shot examples, and strategy-specific instructions
 - **Speed**: 30-60 seconds per mapping (LLM API calls)
 - **Output**: Single consolidated dbt project — all mappings merged with full cross-mapping `ref()` support
-- **Informatica support**: Full — 30+ transform types, 60+ functions, any complexity level
+- **Informatica support**: Full — 33+ transform types, 60+ functions, any complexity level
 
 ### 3.2 Feature Comparison
 
 | Feature | SnowConvert AI | infa2dbt | Winner |
 |---------|---------------|----------|--------|
 | **Input formats** | SSIS `.dtsx` + Informatica `.xml` (limited) | Informatica `.xml` (comprehensive) | SnowConvert (breadth) |
-| **Informatica transform support** | ~5 types (Sorter, Seq Gen, SQ, limited expressions) | **30+ types** (full registry) | **infa2dbt** |
+| **Informatica transform support** | ~5 types (Sorter, Seq Gen, SQ, limited expressions) | **33+ types** (full registry) | **infa2dbt** |
 | **Informatica function support** | ~15 functions | **60+ functions** | **infa2dbt** |
 | **Conversion engine** | Rule-based (deterministic) | LLM-powered + SHA-256 cache | Tie |
 | **Output structure** | Separate dbt projects per task | **Single consolidated project** | **infa2dbt** |
@@ -369,7 +369,7 @@ flowchart LR
 | **Git integration** | Manual / CI-CD docs | **Built-in** git-push command | **infa2dbt** |
 | **Deployment modes** | `snow dbt deploy` only | **3 modes**: direct, Git-based, TASK scheduling | **infa2dbt** |
 | **Cross-mapping ref()** | Not possible (separate projects) | **Full** cross-mapping references | **infa2dbt** |
-| **SQL validation** | None | **15 static checks** (syntax, refs, Informatica residuals, truncation, etc.) | **infa2dbt** |
+| **SQL validation** | None | **14 static checks** (syntax, refs, Informatica residuals, truncation, etc.) | **infa2dbt** |
 | **Post-processing** | None | **30+ pattern fixes** (function conversion, type safety, Snowflake sanitization) | **infa2dbt** |
 | **Post-deployment reconciliation** | None | **6-layer validation pyramid** (schema, row count, aggregate, hash, row diff, business rules) | **infa2dbt** |
 
@@ -397,9 +397,9 @@ flowchart LR
 
 2. **Auto-generated tests** — Tests are generated for every model out of the box (not_null, unique, accepted_values, relationships, accepted_range). SnowConvert generates zero tests — the user must write them manually.
 
-3. **Self-healing** — When the LLM makes a mistake, the framework catches it (15 SQL checks + YAML validation + project-level ref checks), sends the errors back to the LLM, and gets corrected output. SnowConvert has no equivalent.
+3. **Self-healing** — When the LLM makes a mistake, the framework catches it (14 SQL checks + YAML validation + project-level ref checks), sends the errors back to the LLM, and gets corrected output. SnowConvert has no equivalent.
 
-4. **Full Informatica coverage** — SnowConvert's Informatica support is early-stage (~15 functions, basic transforms). infa2dbt supports 30+ transform types and 60+ functions with a comprehensive transformation registry.
+4. **Full Informatica coverage** — SnowConvert's Informatica support is early-stage (~15 functions, basic transforms). infa2dbt supports 33+ transform types and 60+ functions with a comprehensive transformation registry.
 
 5. **Single consolidated project** — SnowConvert creates separate dbt projects per Data Flow Task (no cross-mapping references). infa2dbt merges everything into one project with full `ref()` support across mappings.
 
@@ -677,7 +677,7 @@ The project can run on a Snowflake TASK for automated scheduling:
 -- TASK definition (example)
 CREATE OR REPLACE TASK <PROJECT_NAME>_DAILY_RUN
     WAREHOUSE = <YOUR_WAREHOUSE>
-    SCHEDULE = 'USING CRON 0 6 * * * UTC'
+    SCHEDULE = 'USING CRON 0 6 * * * America/New_York'
 AS
     EXECUTE DBT PROJECT <DATABASE>.<SCHEMA>.<PROJECT_NAME>
         ARGS = 'run --target dev';
@@ -729,7 +729,7 @@ When the LLM generates code with errors, the framework automatically detects and
 
 ```mermaid
 flowchart TB
-    A["LLM Generates\ndbt Code"] --> B["Validate\n15 SQL Checks +\nYAML + Refs"]
+    A["LLM Generates\ndbt Code"] --> B["Validate\n14 SQL Checks +\nYAML + Refs"]
     B -->|"All Pass"| C["Score Quality\n(5 dimensions)"]
     B -->|"Errors Found"| D["Extract Error\nMessages"]
     D --> E["Send Errors\nBack to LLM"]
@@ -749,22 +749,21 @@ flowchart TB
     style I fill:#7ED321,stroke:#5A9A18,color:#fff
 ```
 
-**15 Validation Checks**:
+**14 Validation Checks**:
 1. Must contain `SELECT` statement
 2. Must contain `FROM` clause
 3. Should have `config()` block
 4. Must use `ref()` or `source()`
 5. No hardcoded three-part names (DB.SCHEMA.TABLE)
 6. No trailing semicolons
-7. No unconverted Informatica functions
-8. No unconverted Informatica patterns (`:LKP`, `$$PARAM`, etc.)
-9. Balanced parentheses
-10. Balanced Jinja braces (`{{` / `}}`)
-11. Truncation detection (incomplete SQL)
-12. Markdown artifact detection (code fences in output)
-13. Comment-only file detection
-14. JSON path syntax on XML data detection
-15. Column list abbreviation detection
+7. No unconverted Informatica functions or patterns (`:LKP`, `$$PARAM`, etc.)
+8. Balanced parentheses
+9. Balanced Jinja braces (`{{` / `}}`)
+10. Truncation detection (incomplete SQL)
+11. Markdown artifact detection (code fences in output)
+12. Comment-only file detection
+13. JSON path syntax on XML data detection
+14. Column list abbreviation detection
 Plus cross-file: `ref()` target resolution validation
 
 ### 6.2 Quality Scoring — 5 Dimensions
@@ -841,7 +840,7 @@ flowchart TB
 
 ### 7.1 One Prompt, Complete Pipeline
 
-Paste this prompt into Cortex Code to execute the full 8-step migration pipeline. Replace placeholders with your actual values:
+Paste this prompt into Cortex Code to execute the full 14-step migration pipeline. Replace placeholders with your actual values:
 
 ```
 I want to run the infa2dbt migration framework end-to-end.
@@ -874,10 +873,8 @@ Step 5 - Deploy: Deploy to Snowflake native dbt runtime
     --connection <CONNECTION> --mode direct
 
 Step 6 - Execute on Snowflake: Run models and tests
-  snow dbt execute -c <CONNECTION> --database <DATABASE> \
-    --schema <TARGET_SCHEMA> <PROJECT_NAME> run
-  snow dbt execute -c <CONNECTION> --database <DATABASE> \
-    --schema <TARGET_SCHEMA> <PROJECT_NAME> test
+  snow dbt execute <PROJECT_NAME> run
+  snow dbt execute <PROJECT_NAME> test
 
 Step 7 - Reconcile: Validate source vs target data
   PYTHONPATH="" python -m informatica_to_dbt.cli reconcile \
@@ -967,7 +964,7 @@ Execute each step and show the output summary after each one.
 | Benefit | Details |
 |---------|---------|
 | **One CLI command** | `infa2dbt convert` handles parsing, analysis, LLM generation, validation, and assembly |
-| **8-step pipeline** | convert, discover, report, validate, deploy, execute, reconcile, git-push |
+| **14-step pipeline** | discover, convert, inspect, validate, deploy, run, test, fix, reconcile, report, schedule, git-push |
 | **Automated scheduling** | Deploy as a Snowflake TASK for automated daily/hourly execution |
 | **Assessment reports** | EWI HTML + JSON reports for conversion transparency |
 | **Cache management** | Skip LLM calls on re-runs, clear cache when XML changes |
@@ -977,7 +974,7 @@ Execute each step and show the output summary after each one.
 | Item | Status | Notes |
 |------|--------|-------|
 | Framework CLI | Ready | All 8 commands operational |
-| XML parsing (30+ transforms) | Ready | Full Informatica PowerCenter coverage |
+| XML parsing (33+ transforms) | Ready | Full Informatica PowerCenter coverage |
 | LLM code generation | Ready | Snowflake Cortex with self-healing |
 | Auto-generated tests | Ready | Per-model schema tests |
 | Snowflake deployment | Ready | 3 modes — direct, Git, TASK |
@@ -997,11 +994,11 @@ The framework is designed to scale from proof-of-concept to production migration
 
 | Scale | Mappings | Approach |
 |-------|----------|----------|
-| **POC** (today) | 3 mappings | Single `infa2dbt convert` run |
+| **POC** (today) | 8 mappings (37 models, 251 tests across 4 deployed projects) | Single `infa2dbt convert` run |
 | **Pilot** | 10-20 mappings | Batch convert with `--mode merge` |
 | **Production** | 100+ mappings | Wave-based migration with EWI triage per wave |
 | **Enterprise** | 500+ mappings | Parallelized conversion with CI/CD pipeline integration |
 
 ---
 
-*Document Version: 1.0 — Consolidated Guide. Aligned with infa2dbt Framework v1.0.0.*
+*Document Version: 2.0 — Consolidated Guide. Aligned with infa2dbt Framework v1.0.0.*
