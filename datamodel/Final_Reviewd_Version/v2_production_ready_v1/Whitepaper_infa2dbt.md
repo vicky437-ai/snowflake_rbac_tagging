@@ -543,7 +543,7 @@ SELECT * FROM validated
 | **Sources** | 11 tables (DIM_EQUIPMENT, EQPMNT_AAR_BASE, EQPMNT_NON_RGSTRD + 8 more) |
 | **Transforms** | Lookup, Router, Update Strategy, Aggregator, Expression, Filter, Joiner |
 | **Complexity score** | 81-100 (COMPLEX) |
-| **Generated models** | 17 models (3 staging + 7 intermediate + 2 marts + schema/source files) |
+| **Generated models** | 12 models (3 staging + 8 intermediate + 1 mart + schema/source files) |
 
 **Generated project structure**:
 ```
@@ -554,19 +554,19 @@ models/m_INCR_DM_DIM_EQUIPMENT/
 │   ├── stg_dim_equipment.sql
 │   ├── stg_eqpmnt_aar_base.sql
 │   └── stg_eqpmnt_non_rgstrd.sql
-├── intermediate/                            # 7 intermediate models
+├── intermediate/                            # 8 intermediate models
 │   ├── _int__schema.yml
 │   ├── int_eqpmnt_aar_base_transform.sql
 │   ├── int_eqpmnt_non_rgstrd_transform.sql
-│   ├── int_dim_equipment_router.sql
-│   ├── int_dim_equipment_insert.sql
-│   ├── int_dim_equipment_update.sql
-│   ├── int_dim_equipment_update_type2.sql
+│   ├── int_equipment_final_gather.sql
+│   ├── int_equipment_router_logic.sql
+│   ├── int_equipment_insert_transform.sql
+│   ├── int_equipment_update_transform.sql
+│   ├── int_equipment_type2_update_transform.sql
 │   └── int_dim_equipment_soft_delete.sql
-└── marts/                                   # 2 mart tables
+└── marts/                                   # 1 mart table
     ├── _marts__schema.yml
-    ├── dim_equipment.sql                    # SCD Type 2 — incremental MERGE
-    └── dim_equipment_soft_delete.sql        # Soft-delete tracking
+    └── dim_equipment.sql                    # SCD Type 2 — table materialization
 ```
 
 This mapping demonstrates the framework's ability to handle real-world complexity: 11 source tables are parsed, joined, routed through conditional logic, and materialized as an SCD Type 2 dimension table with proper surrogate keys (MD5 hash), effective/expiry dates, and current-row flags — all generated automatically from the Informatica XML.
@@ -872,7 +872,7 @@ Transparency about what the framework does not handle today is essential for pla
 | Dimension | Current Proof Point | Target |
 |-----------|-------------------|--------|
 | Mappings converted | 8 (across all complexity levels) | 500+ (enterprise deployment) |
-| Largest single mapping | 11 sources, 17 models (DIM_EQUIPMENT) | 20+ sources |
+| Largest single mapping | 11 sources, 12 models (DIM_EQUIPMENT) | 20+ sources |
 | Batch processing | Sequential (one mapping at a time) | Parallelized (`--parallel N`) |
 | Largest batch | 8 XMLs in one run (~18 minutes) | 100+ XMLs per wave |
 
