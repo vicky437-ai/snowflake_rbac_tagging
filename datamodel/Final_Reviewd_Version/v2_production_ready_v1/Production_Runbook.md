@@ -58,6 +58,8 @@ python3 --version   # Must be 3.9+
 git --version        # Must be 2.30+
 ```
 
+> **IMPORTANT — Python 3.12/3.13 users**: The `snowflake.snowpark` namespace package conflicts with `lxml` imports. You **must** prefix all `python3 -m informatica_to_dbt.cli` and `pytest` commands with `PYTHONPATH=""`. Example: `PYTHONPATH="" python3 -m informatica_to_dbt.cli convert ...`. This applies to both CLI commands and test execution.
+
 ### Windows
 
 ```powershell
@@ -70,6 +72,8 @@ git --version        # Must be 2.30+
 python --version
 git --version
 ```
+
+> **Windows PYTHONPATH note:** On Windows, the equivalent of `PYTHONPATH=""` is `set PYTHONPATH=` (CMD) or `$env:PYTHONPATH=""` (PowerShell) before running `infa2dbt` commands, if you encounter `lxml` import errors.
 
 ### Linux (Ubuntu/Debian)
 
@@ -87,12 +91,20 @@ git --version
 ## Step 2: Install Snowflake CLI
 
 ```bash
-# Install via pip
+# Option 1: pip (inside a virtual environment — recommended)
 pip install snowflake-cli
 
+# Option 2: Homebrew (macOS)
+brew install snowflake-cli
+
+# Option 3: pipx (isolated install — avoids dependency conflicts)
+pipx install snowflake-cli
+
 # Verify
-snow --version
+snow --version   # Must be 3.0+
 ```
+
+> **Note:** On macOS 13+ with Homebrew Python, `pip install` outside a virtual environment may fail with "externally-managed-environment" error. Use `brew install` or `pipx install` instead, or install within a virtual environment (Step 4).
 
 ---
 
@@ -200,6 +212,18 @@ project_root/
 
 Execute each step in order. All commands are run from the project root directory.
 
+> **Re-deployment cleanup:** If you are re-deploying a project that already exists in Snowflake, you must first suspend and drop the existing TASKs and project object. Run these commands in exact order:
+> ```sql
+> -- 1. Suspend ROOT task first, then CHILD
+> ALTER TASK <DATABASE>.<SCHEMA>.<PROJECT_NAME>_RUN_TASK SUSPEND;
+> ALTER TASK <DATABASE>.<SCHEMA>.<PROJECT_NAME>_TEST_TASK SUSPEND;
+> -- 2. Drop CHILD task first, then ROOT
+> DROP TASK IF EXISTS <DATABASE>.<SCHEMA>.<PROJECT_NAME>_TEST_TASK;
+> DROP TASK IF EXISTS <DATABASE>.<SCHEMA>.<PROJECT_NAME>_RUN_TASK;
+> -- 3. Drop the dbt project object
+> DROP DBT PROJECT IF EXISTS <DATABASE>.<SCHEMA>.<PROJECT_NAME>;
+> ```
+
 ### 7.1 Convert
 
 Parse Informatica XML files and generate a dbt project:
@@ -211,7 +235,8 @@ infa2dbt convert \
     -m new \
     --connection myconnection \
     --source-schema <YOUR_SOURCE_SCHEMA> \
-    --log-level info
+    --log-level info \
+    --log-file conversion.log
 ```
 
 **What this does:**
@@ -220,9 +245,64 @@ infa2dbt convert \
 - Calls Snowflake Cortex LLM to generate dbt SQL models
 - Produces a complete dbt project in `./output/dbt_project/`
 
-**Expected output:** A dbt project directory containing `dbt_project.yml`, `profiles.yml`, `models/`, `macros/`, `seeds/`, `snapshots/`, and `tests/`.
+**Expected output:** A dbt project directory containing `dbt_project.yml`, `models/`, `macros/`, `seeds/`, `snapshots/`, and `tests/`.
 
-### 7.2 Discover
+> **Important:** The `convert` command does **not** generate `profiles.yml` — you must create it manually before running `validate` (see Step 7.2 below).
+
+### 7.2 Create profiles.yml
+
+The `validate` command requires a `profiles.yml` file in the dbt project directory. Create it manually:
+
+```bash
+cat > ./output/dbt_project/profiles.yml << 'EOF'
+dbt_project:
+  target: dev
+  outputs:
+    dev:
+      type: snowflake
+      account: "<YOUR_ACCOUNT_IDENTIFIER>"
+      user: "<YOUR_USERNAME>"
+      password: "<YOUR_PASSWORD>"
+      warehouse: "<YOUR_WAREHOUSE>"
+      database: "<YOUR_DATABASE>"
+      schema: "<YOUR_DEPLOY_SCHEMA>"
+      role: "<YOUR_ROLE>"
+      threads: 4
+EOF
+```
+
+> **Note:** The profile name (first line) must match the `profile:` value in `dbt_project.yml`. Check with: `grep profile ./output/dbt_project/dbt_project.yml`
+
+### 7.3 Inspect (Manual Review)
+
+Before proceeding, manually review the generated dbt models:
+
+```bash
+# Review the generated SQL models
+ls -la ./output/dbt_project/models/
+
+# Spot-check a staging model
+cat ./output/dbt_project/models/staging/stg_<YOUR_MAPPING>.sql
+
+# Verify schema YAML
+cat ./output/dbt_project/models/staging/_stg__schema.yml
+```
+
+**What to check:**
+- SQL models contain valid SELECT statements with `ref()` / `source()` references
+- No leftover Informatica functions (IIF, ISNULL, ADD_TO_DATE, etc.)
+- Schema YAML has appropriate tests (not_null, unique, accepted_values)
+- Materialization settings are correct (view for staging, table/incremental for marts)
+
+> This step is not automated — it's a manual quality gate before validation and deployment.
+
+> **packages.yml warning:** If the LLM output references `dbt_utils`, the framework may auto-generate a `packages.yml` file. **Snowflake native dbt (v1.9.x) does not support packages.** Delete it before deploying:
+> ```bash
+> rm -f ./output/dbt_project/packages.yml
+> ```
+> Replace any `dbt_utils` macro calls in generated SQL with native Snowflake SQL equivalents.
+
+### 7.4 Discover (Optional)
 
 Inventory the XML files and discover source schemas:
 
@@ -239,7 +319,7 @@ infa2dbt discover \
 - Reports mapping count, source tables, and target tables
 - Queries Snowflake `INFORMATION_SCHEMA` to discover column definitions
 
-### 7.3 Report
+### 7.5 Report
 
 Generate an EWI (Errors/Warnings/Informational) assessment report:
 
@@ -253,7 +333,7 @@ infa2dbt report \
 - Reads conversion metrics saved during the `convert` step
 - Generates an HTML report and JSON report in `./output/dbt_project/reports/`
 
-### 7.4 Validate
+### 7.6 Validate
 
 Compile, run models, and execute tests:
 
@@ -270,7 +350,7 @@ infa2dbt validate \
 
 **Success criteria:** All models pass, all tests pass, zero errors.
 
-### 7.5 Deploy
+### 7.7 Deploy
 
 Deploy the dbt project to Snowflake as a native dbt project object:
 
@@ -280,6 +360,7 @@ infa2dbt deploy \
     -d <YOUR_DATABASE> \
     -s <YOUR_DEPLOY_SCHEMA> \
     -n <YOUR_PROJECT_NAME> \
+    -w <YOUR_WAREHOUSE> \
     --connection myconnection \
     --mode direct
 ```
@@ -288,25 +369,63 @@ infa2dbt deploy \
 - Packages the dbt project
 - Uses `snow dbt deploy` to push it as a Snowflake-native dbt project object
 
-### 7.6 Execute on Snowflake
+> **Re-deploy note:** `infa2dbt deploy --mode direct` does **not** pass `--force` to `snow dbt deploy`. If the project already exists, the deploy will fail. Either drop the existing project first (see the re-deployment cleanup section at the top of Step 7) or deploy directly with `snow dbt deploy`:
+> ```bash
+> snow dbt deploy <YOUR_PROJECT_NAME> --source ./output/dbt_project \
+>     --profiles-dir ./output/dbt_project --force
+> ```
+
+> **TASK Ordering (if using scheduled deployment):** Snowflake TASKs have strict ordering requirements when managing parent-child chains:
+> - **Suspend**: Suspend ROOT task first, then CHILD tasks
+> - **Drop**: Drop CHILD tasks first, then ROOT task
+> - **Create**: Create ROOT task first, then CHILD tasks
+> - **Resume**: Resume CHILD tasks first, then ROOT task
+>
+> Violating this ordering will cause Snowflake errors (e.g., "Cannot resume a child task while root is suspended").
+
+### 7.8 Execute on Snowflake
 
 Run models and tests natively on Snowflake:
 
 ```bash
 # Run all models
-snow dbt execute -c myconnection \
-    --database <YOUR_DATABASE> \
-    --schema <YOUR_DEPLOY_SCHEMA> \
-    <YOUR_PROJECT_NAME> run
+snow dbt execute <YOUR_PROJECT_NAME> run
 
 # Run all tests
-snow dbt execute -c myconnection \
-    --database <YOUR_DATABASE> \
-    --schema <YOUR_DEPLOY_SCHEMA> \
-    <YOUR_PROJECT_NAME> test
+snow dbt execute <YOUR_PROJECT_NAME> test
 ```
 
-### 7.7 Reconcile Source vs Target
+### 7.9 Schedule (Optional)
+
+Create Snowflake TASKs to run the dbt project on a schedule. This uses a parent-child TASK chain: the ROOT task runs models, and the CHILD task runs tests after the ROOT completes.
+
+```sql
+-- 1. Create ROOT task (runs models on schedule)
+CREATE OR REPLACE TASK <DATABASE>.<SCHEMA>.<PROJECT_NAME>_RUN_TASK
+  WAREHOUSE = <YOUR_WAREHOUSE>
+  SCHEDULE = 'USING CRON 0 6 * * * UTC'
+  COMMENT = 'Daily dbt run for <PROJECT_NAME>'
+AS
+  EXECUTE DBT PROJECT <PROJECT_NAME> ARGS = 'run';
+
+-- 2. Create CHILD task (runs tests after models complete)
+CREATE OR REPLACE TASK <DATABASE>.<SCHEMA>.<PROJECT_NAME>_TEST_TASK
+  WAREHOUSE = <YOUR_WAREHOUSE>
+  AFTER <DATABASE>.<SCHEMA>.<PROJECT_NAME>_RUN_TASK
+AS
+  EXECUTE DBT PROJECT <PROJECT_NAME> ARGS = 'test';
+
+-- 3. Resume tasks (CHILD first, then ROOT)
+ALTER TASK <DATABASE>.<SCHEMA>.<PROJECT_NAME>_TEST_TASK RESUME;
+ALTER TASK <DATABASE>.<SCHEMA>.<PROJECT_NAME>_RUN_TASK RESUME;
+
+-- 4. Verify tasks are running
+SHOW TASKS IN SCHEMA <DATABASE>.<SCHEMA>;
+```
+
+> **Note:** The `COMMENT` clause cannot appear after the `AFTER` clause in Snowflake TASK DDL. That is why the CHILD task above does not include a `COMMENT`.
+
+### 7.10 Reconcile Source vs Target
 
 Validate that the dbt output matches the original source data using the 6-layer reconciliation engine:
 
@@ -347,7 +466,7 @@ infa2dbt reconcile \
 
 Reports are written to `./recon_reports/` as HTML (interactive dashboard) and JSON (CI/CD integration).
 
-### 7.8 Push to Git
+### 7.11 Push to Git
 
 Commit and push the generated dbt project to a Git repository:
 
@@ -378,6 +497,11 @@ infa2dbt git-push \
 | `Permission denied on deploy` | Insufficient Snowflake role | Ensure the configured role has `CREATE DATABASE`, `CREATE SCHEMA`, and `USAGE` grants |
 | `TRY_CAST from TIMESTAMP_NTZ to DATE not supported` | `TRY_TO_DATE()` called on a TIMESTAMP_NTZ column | Use `column::DATE` cast instead; the post-processor handles this automatically |
 | `accepted_values` test format error | dbt-fusion v2.0 uses `arguments:` wrapper; Snowflake native dbt 1.9.x does not | Skip local `dbt compile` if using dbt-fusion v2.0. Deploy directly via `snow dbt deploy` and execute via `snow dbt execute` — Snowflake native dbt 1.9.4 handles compilation correctly |
+| `Cannot resume a child task while root is suspended` | Snowflake TASK ordering violated | Suspend ROOT first, then CHILD. Resume CHILD first, then ROOT. Drop CHILD first, then ROOT. Create ROOT first, then CHILD |
+| `profiles.yml not found` during validate | `convert` does not generate `profiles.yml` | Create it manually (see Step 7.2) before running `validate` |
+| `packages.yml` causes deploy failure | Snowflake native dbt 1.9.x does not support packages | Delete `packages.yml` from the project directory before deploying |
+| `COMMENT` syntax error in TASK DDL | `COMMENT` clause placed after `AFTER` clause | Move `COMMENT` before `AFTER`, or remove it from CHILD tasks |
+| Deploy fails with "project already exists" | `infa2dbt deploy` does not pass `--force` | Drop existing project first, or use `snow dbt deploy --force` directly |
 
 ### Verifying a Successful Run
 
@@ -396,19 +520,19 @@ snow sql -c myconnection -q "SELECT COUNT(*) FROM <YOUR_DATABASE>.<YOUR_SCHEMA>.
 If you need to re-run conversion from scratch (e.g. after updating XML files):
 
 ```bash
-# List cached entries to identify stale ones
+# List cached entries and stats
 infa2dbt cache list
+infa2dbt cache stats
 
-# Remove a specific stale cache entry by key prefix
-infa2dbt cache remove <KEY>
-
-# Or clear the entire LLM response cache
+# Clear the entire LLM response cache (requires confirmation)
 infa2dbt cache clear --yes
 
 # Re-run convert
 infa2dbt convert -i ./input/ -o ./output/dbt_project -m new \
     --connection myconnection --source-schema <YOUR_SOURCE_SCHEMA>
 ```
+
+> **Note:** There is no `cache remove` subcommand for selective deletion. To remove a single entry, delete the corresponding `.json` file from the cache directory (default: `~/.infa2dbt/cache/`). Use `infa2dbt cache list` to find the entry key, then remove the matching file.
 
 ---
 
@@ -422,7 +546,7 @@ project_root/
 ├── output/
 │   └── dbt_project/                # Generated dbt project (your output)
 │       ├── dbt_project.yml
-│       ├── profiles.yml
+│       ├── profiles.yml            # Manually created (see Step 7.2)
 │       ├── macros/
 │       ├── models/
 │       │   └── <mapping_name>/
@@ -445,7 +569,7 @@ project_root/
 
 Replace all `<PLACEHOLDER>` values with your environment-specific settings:
 
-> **Python 3.12+ users**: Prefix all `infa2dbt` commands below with `PYTHONPATH=""` if you encounter `lxml` import errors.
+> **Python 3.12/3.13 users**: Prefix all `infa2dbt` and `python3 -m` commands below with `PYTHONPATH=""` if you encounter `lxml` import errors.
 
 ```bash
 # Activate virtual environment
@@ -455,28 +579,49 @@ source .venv/bin/activate
 infa2dbt convert -i ./input/ -o ./output/dbt_project -m new \
     --connection <CONNECTION> --source-schema <SOURCE_SCHEMA>
 
-# 2. Discover
+# 2. Create profiles.yml (convert does NOT generate this)
+cat > ./output/dbt_project/profiles.yml << 'EOF'
+dbt_project:
+  target: dev
+  outputs:
+    dev:
+      type: snowflake
+      account: "<ACCOUNT>"
+      user: "<USER>"
+      password: "<PASSWORD>"
+      warehouse: "<WAREHOUSE>"
+      database: "<DATABASE>"
+      schema: "<DEPLOY_SCHEMA>"
+      role: "<ROLE>"
+      threads: 4
+EOF
+
+# 3. Inspect (manual review — also delete packages.yml if present)
+ls ./output/dbt_project/models/
+rm -f ./output/dbt_project/packages.yml
+
+# 4. Discover (optional)
 infa2dbt discover -i ./input/ --schema-source snowflake \
     --database <DATABASE> --schema <SOURCE_SCHEMA>
 
-# 3. Report
+# 5. Report
 infa2dbt report -p ./output/dbt_project -f both
 
-# 4. Validate
+# 6. Validate
 infa2dbt validate -p ./output/dbt_project --run-tests
 
-# 5. Deploy
+# 7. Deploy
 infa2dbt deploy -p ./output/dbt_project -d <DATABASE> -s <DEPLOY_SCHEMA> \
-    -n <PROJECT_NAME> --connection <CONNECTION> --mode direct
+    -n <PROJECT_NAME> -w <WAREHOUSE> --connection <CONNECTION> --mode direct
 
-# 6. Execute
-snow dbt execute -c <CONNECTION> --database <DATABASE> --schema <DEPLOY_SCHEMA> <PROJECT_NAME> run
-snow dbt execute -c <CONNECTION> --database <DATABASE> --schema <DEPLOY_SCHEMA> <PROJECT_NAME> test
+# 8. Execute
+snow dbt execute <PROJECT_NAME> run
+snow dbt execute <PROJECT_NAME> test
 
-# 7. Reconcile
+# 9. Reconcile
 infa2dbt reconcile -sd <DATABASE> -ss <SOURCE_SCHEMA> -td <DATABASE> -ts <DEPLOY_SCHEMA> \
     -c <CONNECTION> -l all -o ./recon_reports --format both
 
-# 8. Git Push
+# 10. Git Push
 infa2dbt git-push -p ./output/dbt_project --remote-url <GIT_REPO_URL> -b main -m "Migration complete"
 ```
