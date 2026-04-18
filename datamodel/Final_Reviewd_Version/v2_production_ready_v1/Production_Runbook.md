@@ -625,3 +625,150 @@ infa2dbt reconcile -sd <DATABASE> -ss <SOURCE_SCHEMA> -td <DATABASE> -ts <DEPLOY
 # 10. Git Push
 infa2dbt git-push -p ./output/dbt_project --remote-url <GIT_REPO_URL> -b main -m "Migration complete"
 ```
+
+---
+
+## Appendix: Running the Pipeline with Cortex Code
+
+Your customers can use **Snowflake Cortex Code** (the AI coding agent in the Snowflake CLI) to analyze this framework and execute the full end-to-end pipeline interactively. The tested demo prompt file is `docs/Live_Demo_Prompt_Cached.md` — a single-XML pipeline (DIM_EQUIPMENT) with 17 models and 62 tests.
+
+### Prerequisites for the Customer
+
+1. **Snowflake CLI v3.0+** installed with Cortex Code enabled
+2. **Git** installed
+3. **Python 3.9+** installed
+4. **Snowflake connection** configured in `~/.snowflake/config.toml` (see Step 3 above)
+5. **Source tables** loaded — the demo uses `DIM_EQUIPMENT_SOURCES` schema with 11 tables (65K+ rows). You must set up this schema and load data before running.
+
+### Setup Steps
+
+```bash
+# 1. Clone the repository
+git clone <REPOSITORY_URL>
+cd informatica-to-dbt
+
+# 2. Create virtual environment and install
+python3 -m venv .venv
+source .venv/bin/activate   # macOS/Linux
+# .venv\Scripts\activate    # Windows
+pip install -e .
+
+# 3. Verify installation
+infa2dbt version
+snow --version   # Must be 3.0+
+
+# 4. Configure Snowflake connection (if not already done)
+# Edit ~/.snowflake/config.toml with your credentials (see Step 3 in this runbook)
+snow connection test -c myconnection
+
+# 5. Launch Cortex Code from inside the project directory
+cortex
+```
+
+### Prompt 1: Framework Analysis (paste into Cortex Code first)
+
+Use this prompt to have Cortex Code analyze the framework before running anything:
+
+```
+Analyze the infa2dbt framework in the current directory. Read the following files to understand the project:
+
+1. Read pyproject.toml to understand the package, dependencies, and CLI entry point
+2. Read docs/Production_Runbook.md for the full step-by-step production pipeline
+3. Read docs/CLI_Reference.md for all CLI commands and flags
+4. Read informatica_to_dbt/cli.py to understand the actual CLI commands and their flags (convert, discover, deploy, validate, report, cache, reconcile, git-push)
+5. Read docs/Live_Demo_Prompt_Cached.md — this is the tested demo prompt we will execute
+6. List the DIM_INPUT/ directory to see the XML file we will convert
+7. List the input/ directory to see all available XML files
+
+After reading, give me a summary of:
+- What the framework does
+- What CLI commands are available and their key flags
+- What XML files are available (DIM_INPUT/ and input/)
+- What Snowflake connection, source schema, and warehouse I need
+- The exact 14-step execution order from Live_Demo_Prompt_Cached.md
+- What known LLM generation issues to watch for (from the INSPECT step)
+```
+
+### Prompt 2: Execute the Demo Pipeline (paste into Cortex Code)
+
+This is the main execution prompt. It tells Cortex Code to read and execute the tested demo file:
+
+```
+Read the file docs/Live_Demo_Prompt_Cached.md in the current directory. This file contains a fully tested, step-by-step prompt for running the infa2dbt migration pipeline end-to-end using a single XML file (DIM_EQUIPMENT).
+
+Execute ALL 14 steps (Step 0 through Step 13) from that file, in exact order. Stop if any step fails with unrecoverable errors. Show me the output of each step and confirm success before moving to the next step.
+
+**IMPORTANT RULES (these override anything in the prompt file if there is a conflict):**
+- All CLI commands MUST be prefixed with PYTHONPATH="" if using Python 3.12/3.13 (lxml/snowpark namespace conflict)
+- The convert command does NOT generate profiles.yml — Step 4 in the prompt file handles this
+- If a packages.yml file is generated, DELETE it — Snowflake native dbt 1.9.x does not support packages
+- snow dbt deploy syntax: snow dbt deploy NAME --source DIR --profiles-dir DIR --force (do NOT pass -c, --database, or --schema)
+- snow dbt execute syntax: snow dbt execute NAME run|test (no -c, --database, or --schema flags)
+- TASK suspend order: ROOT first, then CHILD
+- TASK drop order: CHILD first, then ROOT
+- TASK resume order: CHILD first, then ROOT
+- COMMENT clause cannot appear after AFTER clause in Snowflake TASK DDL — put COMMENT before AFTER, or omit it from CHILD tasks
+- There is no "infa2dbt cache remove" subcommand — only list, stats, clear
+- Do NOT insert test records into source tables unless the prompt file explicitly says to (the UPDATE statements in Step 0e are OK — they update timestamps, not insert new rows)
+
+**My environment (update these if different from the prompt file defaults):**
+- Snowflake connection name: myconnection
+- Database: TPC_DI_RAW_DATA
+- Source schema: DIM_EQUIPMENT_SOURCES
+- Deploy schema: INFORMATICA_TO_DBT
+- Warehouse: SMALL_WH
+- Deploy project name: DIM_EQUIPMENT_CLEAN
+
+Start with Step 0: CLEANUP.
+```
+
+### Prompt 3: Resume from a Specific Step (paste into Cortex Code)
+
+If a previous run completed partway, use this to resume from a specific step:
+
+```
+Read the file docs/Live_Demo_Prompt_Cached.md. I already completed Steps 0 through <LAST_COMPLETED_STEP>. Resume execution starting from Step <NEXT_STEP> and continue through Step 13.
+
+The dbt project output is in dim_output_demo/. The deployed project name is DIM_EQUIPMENT_CLEAN. Same environment as the prompt file (connection: myconnection, database: TPC_DI_RAW_DATA, warehouse: SMALL_WH).
+
+Prefix all CLI commands with PYTHONPATH="" (Python 3.12+ lxml fix). Show me the output of each step before proceeding to the next.
+```
+
+### Prompt 4: Inspect and Fix Only (paste into Cortex Code)
+
+If the convert step succeeded but you need Cortex to inspect and fix the generated models:
+
+```
+Read the file docs/Live_Demo_Prompt_Cached.md, specifically the Step 3: INSPECT section. It lists 10 known LLM generation issues to check and fix.
+
+The generated dbt project is in dim_output_demo/. Read all the generated SQL and YAML files in dim_output_demo/models/ and check for every issue listed in Step 3. Fix any issues you find directly in the files.
+
+After fixing, deploy and test:
+1. snow dbt deploy DIM_EQUIPMENT_CLEAN --source dim_output_demo --profiles-dir dim_output_demo --force
+2. snow dbt execute DIM_EQUIPMENT_CLEAN run
+3. snow dbt execute DIM_EQUIPMENT_CLEAN test
+
+If any tests fail, diagnose and fix them. Repeat deploy+run+test until all models PASS and all tests PASS (WARNs are acceptable).
+```
+
+### Expected Demo Results
+
+When the full pipeline completes successfully:
+
+| Metric | Expected |
+|--------|----------|
+| Models | 17/17 PASS (16 views + 1 incremental) |
+| Tests | 62/62 PASS (may vary 58-65 depending on inspect fixes) |
+| Deploy | 29 files copied |
+| Reconcile | 8/11 tables match perfectly; 3 expected mismatches (SCD Type 2 + incremental filters) |
+| TASKs | 2 (DIM_EQUIPMENT_CLEAN_RUN_TASK + DIM_EQUIPMENT_CLEAN_TEST_TASK) |
+| Cache | First run ~6 min (LLM); subsequent runs instant (cache HIT) |
+
+### Tips for Customers
+
+- **First run takes longer**: The `convert` step calls the Cortex LLM. Results are cached automatically — subsequent runs with the same XML files return instantly from cache.
+- **Schema test fixes are normal**: LLM-generated schema tests may reference columns that don't exist in the actual data. The INSPECT step (Step 3) in the prompt file lists 10 known issues to check.
+- **Re-running the pipeline**: Always start from Step 0 (CLEANUP) to drop existing TASKs and project objects before re-deploying.
+- **Cache is content-addressed**: Changing the XML file, LLM model, or system prompt generates a new cache key. Old entries remain but are unused. Use `infa2dbt cache stats` to see hit/miss counts.
+- **The prompt file is self-contained**: `docs/Live_Demo_Prompt_Cached.md` contains every command, every expected output, and every known fix. Cortex Code reads this file and follows it step by step.
+- **Adapt for your own XMLs**: Once the demo works, customers can replace `DIM_INPUT/` with their own XML directory and adjust the source schema, project name, and output directory accordingly. The pipeline steps remain the same.
