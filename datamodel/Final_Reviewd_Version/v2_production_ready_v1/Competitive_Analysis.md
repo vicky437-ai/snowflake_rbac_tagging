@@ -128,9 +128,9 @@ Informatica PowerCenter XML (Any mapping, any complexity)
 - **Engine**: LLM-powered (Snowflake Cortex) with comprehensive system prompts, few-shot examples, and strategy-specific instructions
 - **Speed**: 30-60 seconds per mapping (LLM API calls)
 - **Output**: Single consolidated dbt project — all mappings merged with full cross-mapping `ref()` support
-- **Informatica support**: Comprehensive — 33+ transform types, 60+ functions, any complexity level
+- **Informatica support**: Comprehensive — 33+ transform types, 65+ functions, any complexity level
 - **Self-healing**: Automated error detection (14 SQL checks + YAML validation) with LLM correction loop (up to 2 attempts)
-- **Post-processing**: 30+ pattern fixes clean Informatica-specific syntax (IIF→IFF, NVL→COALESCE, ADD_TO_DATE→DATEADD, etc.)
+- **Post-processing**: 25+ pattern fixes clean Informatica-specific syntax (IIF→IFF, NVL→COALESCE, ADD_TO_DATE→DATEADD, etc.)
 - **Reconciliation**: 6-layer validation pyramid (schema, row count, aggregate, hash, row diff, business rules)
 
 ---
@@ -172,14 +172,14 @@ All three frameworks converge on the same target architecture. The differentiati
 | Capability | Flowline | SnowConvert | infa2dbt |
 |-----------|----------|-------------|----------|
 | **Informatica transform coverage** | Unknown (proprietary) | ~5 types (early stage) | **33+ types** |
-| **Informatica function coverage** | Unknown (proprietary) | ~15 functions | **60+ functions** |
+| **Informatica function coverage** | Unknown (proprietary) | ~15 functions | **65+ functions** |
 | **SSIS support** | Yes | Yes (primary strength) | No (Informatica only) |
 | **Talend support** | Yes | No | No |
 | **Self-healing (auto-fix errors)** | Human review (step 3) | No | **Yes (automated, 2-attempt LLM loop)** |
 | **Auto-generated dbt tests** | Unknown | No | **Yes (per-model: not_null, unique, accepted_values, relationships, accepted_range)** |
 | **Complexity scoring** | Unknown | Basic | **11-dimension, 0-100 scoring** |
-| **Quality scoring per mapping** | Unknown | None | **5-dimension, 0-100 scoring** |
-| **Post-processing (residual cleanup)** | Unknown | None | **30+ pattern fixes** |
+| **Quality scoring per mapping** | Unknown | None | **6-dimension, 0-100 scoring** |
+| **Post-processing (residual cleanup)** | Unknown | None | **25+ pattern fixes** |
 | **SQL static validation** | Unknown | None | **14 checks** |
 | **Token-aware chunking** | N/A | N/A | **Yes (handles 100K+ token mappings)** |
 | **Output caching (SHA-256)** | N/A | N/A | **Yes (deterministic re-runs)** |
@@ -218,15 +218,15 @@ All three frameworks converge on the same target architecture. The differentiati
 
 | Area | Why infa2dbt Wins | vs Flowline | vs SnowConvert |
 |------|-------------------|-------------|----------------|
-| **Informatica depth** | 33+ transform types, 60+ functions — most comprehensive Informatica parser | Unknown (proprietary) | ~5 types, ~15 functions |
+| **Informatica depth** | 33+ transform types, 65+ functions — most comprehensive Informatica parser | Unknown (proprietary) | ~5 types, ~15 functions |
 | **Self-healing automation** | Automated error detection + LLM correction loop — no human intervention needed | Human review only | No equivalent |
 | **Auto-generated dbt tests** | Per-model tests generated automatically (not_null, unique, accepted_values, etc.) | Unknown | No tests generated |
 | **6-layer reconciliation** | Schema → row count → aggregate → hash → row diff → business rules | Data comparison (less structured) | No reconciliation |
 | **Single CLI pipeline** | One tool covers all 14 steps — no context switching between tools | Multi-tool (proprietary + dbt + Fivetran) | Partial coverage |
-| **Transparency** | 11-dimension complexity scoring + 5-dimension quality scoring + EWI reports | Limited visibility into proprietary tooling | Basic EWI reports |
+| **Transparency** | 11-dimension complexity scoring + 6-dimension quality scoring + EWI reports | Limited visibility into proprietary tooling | Basic EWI reports |
 | **Cost** | No consulting fees, no product license — only Cortex credits (~$0.50-2 per mapping) | Enterprise consulting fees | Product license |
 | **Self-service** | No vendor dependency — run anytime, anywhere, on any mapping | Requires consultant engagement | Self-service (limited Informatica) |
-| **Post-processing depth** | 30+ pattern fixes clean Informatica residuals that LLMs commonly leave behind | Unknown | No post-processing |
+| **Post-processing depth** | 25+ pattern fixes clean Informatica residuals that LLMs commonly leave behind | Unknown | No post-processing |
 | **Token-aware chunking** | Handles arbitrarily large mappings by splitting while preserving transformation chains | N/A | N/A |
 | **Output caching** | SHA-256 cache makes re-runs instant and deterministic — no wasted LLM calls | N/A | Inherently deterministic |
 | **Cross-mapping consolidation** | Single dbt project with full `ref()` support across all mappings | Yes (their tooling) | No (separate projects) |
@@ -370,7 +370,7 @@ infa2dbt's `discover` + complexity analyzer covers:
 
 ### 9.3 Key Takeaways
 
-1. **infa2dbt is technically the most capable** for Informatica-specific migration — deepest transform coverage (33+ types, 60+ functions), best automation (self-healing, auto-tests, reconciliation), and lowest cost of all three.
+1. **infa2dbt is technically the most capable** for Informatica-specific migration — deepest transform coverage (33+ types, 65+ functions), best automation (self-healing, auto-tests, reconciliation), and lowest cost of all three.
 
 2. **Flowline has the enterprise wrapper** — change management, proven client logos (NHS, BBC, AstraZeneca, MACIF), multi-ETL support, and the consulting expertise that large organizations require for migrations at scale.
 
